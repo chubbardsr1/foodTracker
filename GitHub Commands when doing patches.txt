@@ -1,0 +1,9 @@
+## GitHub Commands when doing patches
+
+git apply .\update-name.patch
+
+git status
+git diff
+git add .
+git commit -m "Describe the update"
+git push
