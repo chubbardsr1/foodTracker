@@ -1,0 +1,498 @@
+diff --git a/app/api/custom-foods/route.ts b/app/api/custom-foods/route.ts
+new file mode 100644
+index 0000000..050ddad
+--- /dev/null
++++ b/app/api/custom-foods/route.ts
+@@ -0,0 +1,16 @@
++import { asc, eq } from "drizzle-orm";
++import { getDb } from "../../../db";
++import { customFoods } from "../../../db/schema";
++import { profileFrom } from "../profile";
++
++export async function GET(request: Request) {
++  try {
++    const foods = await getDb().select().from(customFoods)
++      .where(eq(customFoods.owner, profileFrom(request)))
++      .orderBy(asc(customFoods.name))
++      .limit(100);
++    return Response.json({ foods });
++  } catch (error) {
++    return Response.json({ error: error instanceof Error ? error.message : "Unable to load custom foods" }, { status: 500 });
++  }
++}
+diff --git a/app/api/entries/route.ts b/app/api/entries/route.ts
+index 249b5ea..3f6b00d 100644
+--- a/app/api/entries/route.ts
++++ b/app/api/entries/route.ts
+@@ -1,16 +1,16 @@
+ import { and, asc, eq } from "drizzle-orm";
+ import { getDb } from "../../../db";
+-import { foodEntries, nutritionGoals } from "../../../db/schema";
++import { customFoods, foodEntries, nutritionGoals } from "../../../db/schema";
++import { profileFrom } from "../profile";
+ 
+ const validMeals = new Set(["Breakfast", "Lunch", "Dinner", "Snacks"]);
+-const ownerFrom = (request: Request) => request.headers.get("oai-authenticated-user-email") ?? "site-owner";
+ const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : NaN;
+ 
+ export async function GET(request: Request) {
+   try {
+     const date = new URL(request.url).searchParams.get("date") ?? "";
+     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return Response.json({ error: "A valid date is required" }, { status: 400 });
+-    const db = getDb(); const owner = ownerFrom(request);
++    const db = getDb(); const owner = profileFrom(request);
+     const [entries, goalRows] = await Promise.all([
+       db.select().from(foodEntries).where(and(eq(foodEntries.owner, owner), eq(foodEntries.eatenOn, date))).orderBy(asc(foodEntries.id)),
+       db.select().from(nutritionGoals).where(eq(nutritionGoals.owner, owner)).limit(1),
+@@ -25,7 +25,15 @@ export async function POST(request: Request) {
+     const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? ""); const eatenOn = String(payload.eatenOn ?? "");
+     const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
+     if (!name || !serving || !validMeals.has(meal) || !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every nutrition field with a valid value" }, { status: 400 });
+-    const [entry] = await getDb().insert(foodEntries).values({ owner: ownerFrom(request), eatenOn, meal, name, serving, ...nutrition }).returning();
++    const db = getDb();
++    const owner = profileFrom(request);
++    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving, ...nutrition }).returning();
++    if (payload.saveCustom === true) {
++      await db.insert(customFoods).values({ owner, name, serving, ...nutrition }).onConflictDoUpdate({
++        target: [customFoods.owner, customFoods.name, customFoods.serving],
++        set: nutrition,
++      });
++    }
+     return Response.json({ entry }, { status: 201 });
+   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to save food" }, { status: 500 }); }
+ }
+@@ -34,7 +42,7 @@ export async function DELETE(request: Request) {
+   try {
+     const id = Number(new URL(request.url).searchParams.get("id"));
+     if (!Number.isInteger(id)) return Response.json({ error: "A valid entry is required" }, { status: 400 });
+-    await getDb().delete(foodEntries).where(and(eq(foodEntries.id, id), eq(foodEntries.owner, ownerFrom(request))));
++    await getDb().delete(foodEntries).where(and(eq(foodEntries.id, id), eq(foodEntries.owner, profileFrom(request))));
+     return Response.json({ deleted: true });
+   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to remove food" }, { status: 500 }); }
+ }
+diff --git a/app/api/goals/route.ts b/app/api/goals/route.ts
+index 3f03d7f..1696a4b 100644
+--- a/app/api/goals/route.ts
++++ b/app/api/goals/route.ts
+@@ -1,15 +1,14 @@
+ import { eq } from "drizzle-orm";
+ import { getDb } from "../../../db";
+ import { nutritionGoals } from "../../../db/schema";
+-
+-const ownerFrom = (request: Request) => request.headers.get("oai-authenticated-user-email") ?? "site-owner";
++import { profileFrom } from "../profile";
+ 
+ export async function PUT(request: Request) {
+   try {
+     const payload = await request.json() as Record<string, unknown>;
+-    const goals = { calories: Number(payload.calories), protein: Number(payload.protein), fat: Number(payload.fat), netCarbs: Number(payload.netCarbs) };
++    const goals = { calories: Number(payload.calories), protein: Number(payload.protein), fat: Number(payload.fat), netCarbs: Number(payload.netCarbs), waterOunces: Number(payload.waterOunces) };
+     if (Object.values(goals).some(value => !Number.isFinite(value) || value <= 0)) return Response.json({ error: "Every goal must be greater than zero" }, { status: 400 });
+-    const db = getDb(); const owner = ownerFrom(request);
++    const db = getDb(); const owner = profileFrom(request);
+     const existing = await db.select({ id: nutritionGoals.id }).from(nutritionGoals).where(eq(nutritionGoals.owner, owner)).limit(1);
+     if (existing[0]) await db.update(nutritionGoals).set({ ...goals, updatedAt: new Date().toISOString() }).where(eq(nutritionGoals.owner, owner));
+     else await db.insert(nutritionGoals).values({ owner, ...goals });
+diff --git a/app/api/profile.ts b/app/api/profile.ts
+new file mode 100644
+index 0000000..3530093
+--- /dev/null
++++ b/app/api/profile.ts
+@@ -0,0 +1,7 @@
++const profiles = new Set(["chris", "sarah"]);
++
++export function profileFrom(request: Request) {
++  const requested = request.headers.get("x-food-tracker-profile")?.trim().toLowerCase();
++  if (requested && profiles.has(requested)) return requested;
++  return "chris";
++}
+diff --git a/app/api/water/route.ts b/app/api/water/route.ts
+new file mode 100644
+index 0000000..a733d71
+--- /dev/null
++++ b/app/api/water/route.ts
+@@ -0,0 +1,43 @@
++import { and, asc, eq } from "drizzle-orm";
++import { getDb } from "../../../db";
++import { waterEntries } from "../../../db/schema";
++import { profileFrom } from "../profile";
++
++export async function GET(request: Request) {
++  try {
++    const date = new URL(request.url).searchParams.get("date") ?? "";
++    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return Response.json({ error: "A valid date is required" }, { status: 400 });
++    const entries = await getDb().select().from(waterEntries)
++      .where(and(eq(waterEntries.owner, profileFrom(request)), eq(waterEntries.drankOn, date)))
++      .orderBy(asc(waterEntries.id));
++    return Response.json({ entries });
++  } catch (error) {
++    return Response.json({ error: error instanceof Error ? error.message : "Unable to load water" }, { status: 500 });
++  }
++}
++
++export async function POST(request: Request) {
++  try {
++    const payload = await request.json() as { drankOn?: unknown; ounces?: unknown };
++    const drankOn = String(payload.drankOn ?? "");
++    const ounces = Number(payload.ounces);
++    if (!/^\d{4}-\d{2}-\d{2}$/.test(drankOn) || !Number.isFinite(ounces) || ounces <= 0 || ounces > 256) {
++      return Response.json({ error: "Enter a valid amount between 1 and 256 ounces" }, { status: 400 });
++    }
++    const [entry] = await getDb().insert(waterEntries).values({ owner: profileFrom(request), drankOn, ounces }).returning();
++    return Response.json({ entry }, { status: 201 });
++  } catch (error) {
++    return Response.json({ error: error instanceof Error ? error.message : "Unable to add water" }, { status: 500 });
++  }
++}
++
++export async function DELETE(request: Request) {
++  try {
++    const id = Number(new URL(request.url).searchParams.get("id"));
++    if (!Number.isInteger(id)) return Response.json({ error: "A valid water entry is required" }, { status: 400 });
++    await getDb().delete(waterEntries).where(and(eq(waterEntries.id, id), eq(waterEntries.owner, profileFrom(request))));
++    return Response.json({ deleted: true });
++  } catch (error) {
++    return Response.json({ error: error instanceof Error ? error.message : "Unable to remove water" }, { status: 500 });
++  }
++}
+diff --git a/app/food-tracker.tsx b/app/food-tracker.tsx
+index feb62a9..681cde0 100644
+--- a/app/food-tracker.tsx
++++ b/app/food-tracker.tsx
+@@ -2,73 +2,197 @@
+ 
+ import { FormEvent, useEffect, useMemo, useState } from "react";
+ 
++type Profile = "chris" | "sarah";
+ type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
+ type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
+-type Goals = { calories: number; protein: number; fat: number; netCarbs: number };
++type WaterEntry = { id: number; drankOn: string; ounces: number };
++type Food = { id: number; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
++type Goals = { calories: number; protein: number; fat: number; netCarbs: number; waterOunces: number };
+ 
+ const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
+-const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25 };
+-function localDate(offset = 0) { const d = new Date(); d.setDate(d.getDate() + offset); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
++const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, waterOunces: 64 };
++const profileNames: Record<Profile, string> = { chris: "Chris", sarah: "Sarah" };
++function localDate() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+ function round(value: number) { return Math.round(value * 10) / 10; }
+ 
+ export default function FoodTracker() {
++  const [profile, setProfile] = useState<Profile | null>(null);
+   const [date, setDate] = useState(localDate());
+   const [entries, setEntries] = useState<Entry[]>([]);
++  const [water, setWater] = useState<WaterEntry[]>([]);
+   const [goals, setGoals] = useState<Goals>(defaultGoals);
+   const [loading, setLoading] = useState(true);
+   const [modalMeal, setModalMeal] = useState<Meal | null>(null);
+   const [goalOpen, setGoalOpen] = useState(false);
++  const [customWaterOpen, setCustomWaterOpen] = useState(false);
+   const [message, setMessage] = useState("");
+ 
++  useEffect(() => {
++    const saved = window.localStorage.getItem("foodTrackerProfile");
++    if (saved === "chris" || saved === "sarah") setProfile(saved);
++    else setLoading(false);
++  }, []);
++
++  const headers = useMemo(() => profile ? { "x-food-tracker-profile": profile } : {}, [profile]);
++
+   async function loadDay(day: string) {
++    if (!profile) return;
+     setLoading(true);
+     try {
+-      const response = await fetch(`/api/entries?date=${day}`);
+-      const data = await response.json();
+-      if (!response.ok) throw new Error(data.error ?? "Unable to load entries");
+-      setEntries(data.entries ?? []); setGoals(data.goals ?? defaultGoals);
++      const [foodResponse, waterResponse] = await Promise.all([
++        fetch(`/api/entries?date=${day}`, { headers }),
++        fetch(`/api/water?date=${day}`, { headers }),
++      ]);
++      const foodData = await foodResponse.json();
++      const waterData = await waterResponse.json();
++      if (!foodResponse.ok) throw new Error(foodData.error ?? "Unable to load entries");
++      if (!waterResponse.ok) throw new Error(waterData.error ?? "Unable to load water");
++      setEntries(foodData.entries ?? []);
++      setWater(waterData.entries ?? []);
++      setGoals({ ...defaultGoals, ...(foodData.goals ?? {}) });
+     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load this day"); }
+     finally { setLoading(false); }
+   }
+-  useEffect(() => { void loadDay(date); }, [date]);
++  useEffect(() => { void loadDay(date); }, [date, profile]);
++
++  const totals = useMemo(() => entries.reduce((sum, item) => ({
++    calories: sum.calories + item.calories, protein: sum.protein + item.protein,
++    fat: sum.fat + item.fat, carbs: sum.carbs + item.carbs, fiber: sum.fiber + item.fiber,
++    netCarbs: sum.netCarbs + Math.max(0, item.carbs - item.fiber),
++  }), { calories: 0, protein: 0, fat: 0, carbs: 0, fiber: 0, netCarbs: 0 }), [entries]);
++  const waterTotal = water.reduce((sum, item) => sum + item.ounces, 0);
++
++  function selectProfile(next: Profile) {
++    window.localStorage.setItem("foodTrackerProfile", next);
++    setEntries([]); setWater([]); setGoals(defaultGoals); setProfile(next);
++  }
++  function shiftDate(days: number) {
++    const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + days);
++    setDate(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`);
++  }
++  async function removeEntry(id: number) {
++    const response = await fetch(`/api/entries?id=${id}`, { method: "DELETE", headers });
++    if (response.ok) setEntries(current => current.filter(item => item.id !== id));
++  }
++  async function addWater(ounces: number) {
++    const response = await fetch("/api/water", {
++      method: "POST", headers: { ...headers, "content-type": "application/json" },
++      body: JSON.stringify({ drankOn: date, ounces }),
++    });
++    const data = await response.json();
++    if (response.ok) setWater(current => [...current, data.entry]);
++    else setMessage(data.error ?? "Unable to add water");
++  }
++  async function removeWater(id: number) {
++    const response = await fetch(`/api/water?id=${id}`, { method: "DELETE", headers });
++    if (response.ok) setWater(current => current.filter(item => item.id !== id));
++  }
+ 
+-  const totals = useMemo(() => entries.reduce((sum, item) => ({ calories: sum.calories + item.calories, protein: sum.protein + item.protein, fat: sum.fat + item.fat, carbs: sum.carbs + item.carbs, fiber: sum.fiber + item.fiber, netCarbs: sum.netCarbs + Math.max(0, item.carbs - item.fiber) }), { calories: 0, protein: 0, fat: 0, carbs: 0, fiber: 0, netCarbs: 0 }), [entries]);
+-  function shiftDate(days: number) { const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + days); setDate(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`); }
+-  async function removeEntry(id: number) { const response = await fetch(`/api/entries?id=${id}`, { method: "DELETE" }); if (response.ok) setEntries(current => current.filter(item => item.id !== id)); }
++  if (!profile) return <ProfileChooser onSelect={selectProfile} />;
+ 
+   return <main className="app-shell">
+-    <header className="topbar"><div className="brand-mark">N</div><div><p className="eyebrow">Daily Food Tracker</p><h1>Nourish</h1></div><button className="icon-button" onClick={() => setGoalOpen(true)} aria-label="Edit daily goals">⚙</button></header>
+-    <section className="date-nav" aria-label="Choose tracking date"><button onClick={() => shiftDate(-1)} aria-label="Previous day">‹</button><button className="date-button" onClick={() => setDate(localDate())}><strong>{date === localDate() ? "Today" : new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "long" })}</strong><span>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span></button><button onClick={() => shiftDate(1)} aria-label="Next day">›</button></section>
+-    <section className="summary-card"><div className="calorie-ring" style={{ "--progress": `${Math.min(100, totals.calories / goals.calories * 100)}%` } as React.CSSProperties}><div><strong>{Math.round(totals.calories)}</strong><span>of {goals.calories}</span></div></div><div className="summary-copy"><span>CALORIES</span><strong>{Math.max(0, Math.round(goals.calories - totals.calories))} remaining</strong><small>{totals.calories > goals.calories ? `${Math.round(totals.calories - goals.calories)} over goal` : "You’re on track"}</small></div></section>
+-    <section className="macro-grid"><Macro label="Net carbs" value={round(totals.netCarbs)} goal={goals.netCarbs} color="purple" /><Macro label="Protein" value={round(totals.protein)} goal={goals.protein} color="coral" /><Macro label="Fat" value={round(totals.fat)} goal={goals.fat} color="gold" /></section>
++    <header className="topbar">
++      <div className="brand-mark">N</div>
++      <div><p className="eyebrow">Daily Food Tracker</p><h1>Nourish</h1></div>
++      <button className="profile-button" onClick={() => { window.localStorage.removeItem("foodTrackerProfile"); setProfile(null); }} aria-label="Switch profile">
++        <span>{profileNames[profile].charAt(0)}</span>{profileNames[profile]}
++      </button>
++      <button className="icon-button" onClick={() => setGoalOpen(true)} aria-label="Edit daily goals">⚙</button>
++    </header>
++    <section className="date-nav" aria-label="Choose tracking date">
++      <button onClick={() => shiftDate(-1)} aria-label="Previous day">‹</button>
++      <button className="date-button" onClick={() => setDate(localDate())}>
++        <strong>{date === localDate() ? "Today" : new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "long" })}</strong>
++        <span>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
++      </button>
++      <button onClick={() => shiftDate(1)} aria-label="Next day">›</button>
++    </section>
++    <section className="summary-card">
++      <div className="calorie-ring" style={{ "--progress": `${Math.min(100, totals.calories / goals.calories * 100)}%` } as React.CSSProperties}><div><strong>{Math.round(totals.calories)}</strong><span>of {goals.calories}</span></div></div>
++      <div className="summary-copy"><span>CALORIES</span><strong>{Math.max(0, Math.round(goals.calories - totals.calories))} remaining</strong><small>{totals.calories > goals.calories ? `${Math.round(totals.calories - goals.calories)} over goal` : "You’re on track"}</small></div>
++    </section>
++    <section className="macro-grid">
++      <Macro label="Net carbs" value={round(totals.netCarbs)} goal={goals.netCarbs} color="purple" />
++      <Macro label="Protein" value={round(totals.protein)} goal={goals.protein} color="coral" />
++      <Macro label="Fat" value={round(totals.fat)} goal={goals.fat} color="gold" />
++    </section>
++    <section className="water-card">
++      <div className="water-heading"><div className="water-drop">◒</div><div><p className="eyebrow">Hydration</p><h2>{round(waterTotal)} <small>of {goals.waterOunces} oz</small></h2></div></div>
++      <div className="water-progress"><i style={{ width: `${Math.min(100, waterTotal / goals.waterOunces * 100)}%` }} /></div>
++      <div className="water-buttons">
++        {[6, 8, 12].map(ounces => <button key={ounces} onClick={() => void addWater(ounces)}>+ {ounces} oz</button>)}
++        <button onClick={() => setCustomWaterOpen(true)}>+ Other</button>
++      </div>
++      {water.length > 0 && <div className="water-history">{water.map(item => <button key={item.id} onClick={() => void removeWater(item.id)} title="Remove this water entry">{round(item.ounces)} oz ×</button>)}</div>}
++    </section>
+     {message && <button className="notice" onClick={() => setMessage("")}>{message} ×</button>}
+     <section className="meals-section"><div className="section-heading"><div><p className="eyebrow">Your day</p><h2>Meals</h2></div><span>{entries.length} {entries.length === 1 ? "item" : "items"}</span></div>
+-      {loading ? <div className="empty-state">Loading your day…</div> : meals.map(meal => { const items = entries.filter(entry => entry.meal === meal); const calories = items.reduce((sum, item) => sum + item.calories, 0); return <article className="meal-card" key={meal}><div className="meal-title"><div className={`meal-icon ${meal.toLowerCase()}`}>{meal === "Breakfast" ? "☀" : meal === "Lunch" ? "◐" : meal === "Dinner" ? "☾" : "✦"}</div><div><h3>{meal}</h3><span>{Math.round(calories)} calories</span></div><button onClick={() => setModalMeal(meal)} aria-label={`Add food to ${meal}`}>+</button></div>{items.length === 0 ? <button className="empty-meal" onClick={() => setModalMeal(meal)}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{Math.round(item.calories)}</b><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}</article>; })}
++      {loading ? <div className="empty-state">Loading your day…</div> : meals.map(meal => {
++        const items = entries.filter(entry => entry.meal === meal);
++        const calories = items.reduce((sum, item) => sum + item.calories, 0);
++        return <article className="meal-card" key={meal}>
++          <div className="meal-title"><div className={`meal-icon ${meal.toLowerCase()}`}>{meal === "Breakfast" ? "☀" : meal === "Lunch" ? "◐" : meal === "Dinner" ? "☾" : "✦"}</div><div><h3>{meal}</h3><span>{Math.round(calories)} calories</span></div><button onClick={() => setModalMeal(meal)} aria-label={`Add food to ${meal}`}>+</button></div>
++          {items.length === 0 ? <button className="empty-meal" onClick={() => setModalMeal(meal)}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{Math.round(item.calories)}</b><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
++        </article>;
++      })}
+     </section>
+     <button className="floating-add" onClick={() => setModalMeal("Breakfast")}><span>＋</span> Add food</button>
+-    {modalMeal && <AddFood meal={modalMeal} date={date} onClose={() => setModalMeal(null)} onSaved={(entry) => { setEntries(current => [...current, entry]); setModalMeal(null); }} />}
+-    {goalOpen && <GoalEditor goals={goals} onClose={() => setGoalOpen(false)} onSaved={(next) => { setGoals(next); setGoalOpen(false); }} />}
++    {modalMeal && <AddFood meal={modalMeal} date={date} profile={profile} onClose={() => setModalMeal(null)} onSaved={(entry) => { setEntries(current => [...current, entry]); setModalMeal(null); }} />}
++    {goalOpen && <GoalEditor goals={goals} profile={profile} onClose={() => setGoalOpen(false)} onSaved={(next) => { setGoals(next); setGoalOpen(false); }} />}
++    {customWaterOpen && <CustomWater onClose={() => setCustomWaterOpen(false)} onAdd={(ounces) => { void addWater(ounces); setCustomWaterOpen(false); }} />}
+   </main>;
+ }
+ 
+-function Macro({ label, value, goal, color }: { label: string; value: number; goal: number; color: string }) { const pct = Math.min(100, value / goal * 100); return <div className="macro"><div className="macro-label"><span>{label}</span><b>{value}g</b></div><div className="progress"><i className={color} style={{ width: `${pct}%` }} /></div><small>{Math.max(0, round(goal - value))}g left</small></div>; }
++function ProfileChooser({ onSelect }: { onSelect: (profile: Profile) => void }) {
++  return <main className="profile-screen"><div className="profile-panel"><div className="brand-mark large">N</div><p className="eyebrow">Daily Food Tracker</p><h1>Who is tracking?</h1><p>Your food, goals, water, and custom foods stay in your own profile.</p><div className="profile-options"><button onClick={() => onSelect("chris")}><span>C</span><strong>Chris</strong></button><button onClick={() => onSelect("sarah")}><span>S</span><strong>Sarah</strong></button></div></div></main>;
++}
++
++function Macro({ label, value, goal, color }: { label: string; value: number; goal: number; color: string }) {
++  return <div className="macro"><div className="macro-label"><span>{label}</span><b>{value}g</b></div><div className="progress"><i className={color} style={{ width: `${Math.min(100, value / goal * 100)}%` }} /></div><small>{Math.max(0, round(goal - value))}g left</small></div>;
++}
+ 
+-function AddFood({ meal, date, onClose, onSaved }: { meal: Meal; date: string; onClose: () => void; onSaved: (entry: Entry) => void }) {
++function AddFood({ meal, date, profile, onClose, onSaved }: { meal: Meal; date: string; profile: Profile; onClose: () => void; onSaved: (entry: Entry) => void }) {
+   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+   const [query, setQuery] = useState(""); const [searching, setSearching] = useState(false);
+-  const [results, setResults] = useState<Array<{ id: number; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number }>>([]);
+-  const [selected, setSelected] = useState<{ name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number } | null>(null);
++  const [results, setResults] = useState<Food[]>([]); const [myFoods, setMyFoods] = useState<Food[]>([]);
++  const [selected, setSelected] = useState<Food | null>(null);
++  const headers = { "x-food-tracker-profile": profile };
++  useEffect(() => { fetch("/api/custom-foods", { headers }).then(response => response.json()).then(data => setMyFoods(data.foods ?? [])).catch(() => undefined); }, [profile]);
+   async function searchFoods() { if (query.trim().length < 2) return; setSearching(true); setError(""); const response = await fetch(`/api/foods?q=${encodeURIComponent(query)}`); const data = await response.json(); if (response.ok) setResults(data.foods ?? []); else setError(data.error ?? "Food search is unavailable"); setSearching(false); }
+-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); setError(""); const data = new FormData(event.currentTarget); const body = Object.fromEntries(data.entries()); const response = await fetch("/api/entries", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, eatenOn: date }) }); const result = await response.json(); if (!response.ok) { setError(result.error ?? "Unable to save food"); setBusy(false); return; } onSaved(result.entry); }
+-  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="add-title"><div className="modal-head"><div><p className="eyebrow">{meal}</p><h2 id="add-title">Add food</h2></div><button onClick={onClose}>×</button></div>
+-    <div className="food-search"><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void searchFoods(); } }} placeholder="Search USDA foods…" autoFocus /><button type="button" onClick={() => void searchFoods()} disabled={searching}>{searching ? "…" : "Search"}</button></div>
++  async function submit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault(); setBusy(true); setError("");
++    const form = new FormData(event.currentTarget); const body = Object.fromEntries(form.entries());
++    const response = await fetch("/api/entries", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ ...body, eatenOn: date, saveCustom: form.get("saveCustom") === "on" }) });
++    const result = await response.json(); if (!response.ok) { setError(result.error ?? "Unable to save food"); setBusy(false); return; } onSaved(result.entry);
++  }
++  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="add-title">
++    <div className="modal-head"><div><p className="eyebrow">{meal}</p><h2 id="add-title">Add food</h2></div><button onClick={onClose}>×</button></div>
++    {myFoods.length > 0 && !selected && <><p className="field-heading">My saved foods</p><div className="saved-foods">{myFoods.map(food => <button key={food.id} onClick={() => setSelected(food)}><strong>{food.name}</strong><span>{food.serving}</span></button>)}</div></>}
++    <div className="food-search"><input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void searchFoods(); } }} placeholder="Search USDA foods…" autoFocus /><button type="button" onClick={() => void searchFoods()} disabled={searching}>{searching ? "…" : "Search"}</button></div>
+     {results.length > 0 && !selected && <div className="search-results">{results.map(food => <button key={food.id} type="button" onClick={() => { setSelected(food); setResults([]); }}><strong>{food.name}</strong><span>{food.serving} · {Math.round(food.calories)} cal · {round(food.carbs - food.fiber)}g net</span></button>)}</div>}
+-    <div className="coming-soon"><span>✦</span><div><strong>{selected ? "Nutrition found" : "Search or enter it yourself"}</strong><p>{selected ? "Review the serving and nutrition before saving." : "USDA search is available; package-label values can still be entered manually."}</p></div></div>
+-    <form key={selected?.name ?? "manual"} onSubmit={submit} className="food-form"><input type="hidden" name="meal" value={meal} /><label>Food name<input name="name" placeholder="e.g. Scrambled eggs" required defaultValue={selected?.name ?? ""} /></label><label>Serving<input name="serving" placeholder="e.g. 2 large eggs" required defaultValue={selected?.serving ?? ""} /></label><div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="1" required defaultValue={selected ? Math.round(selected.calories) : undefined} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.1" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.1" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.1" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.1" defaultValue={selected?.fiber ?? 0} required /></label></div>{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Add to diary"}</button></form></div></div>;
++    <div className="coming-soon"><span>✦</span><div><strong>{selected ? "Nutrition selected" : "Search or enter it yourself"}</strong><p>{selected ? "Review the serving and nutrition before saving." : "Foods entered manually can be saved to My Foods for next time."}</p></div></div>
++    <form key={selected?.id ?? "manual"} onSubmit={submit} className="food-form"><input type="hidden" name="meal" value={meal} />
++      <label>Food name<input name="name" placeholder="e.g. Scrambled eggs" required defaultValue={selected?.name ?? ""} /></label>
++      <label>Serving<input name="serving" placeholder="e.g. 2 large eggs" required defaultValue={selected?.serving ?? ""} /></label>
++      <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="1" required defaultValue={selected ? Math.round(selected.calories) : undefined} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.1" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.1" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.1" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.1" defaultValue={selected?.fiber ?? 0} required /></label></div>
++      {!selected && <label className="checkbox-row"><input name="saveCustom" type="checkbox" defaultChecked /><span>Save this to My Foods</span></label>}
++      {error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Add to diary"}</button>
++    </form>
++  </div></div>;
+ }
+ 
+-function GoalEditor({ goals, onClose, onSaved }: { goals: Goals; onClose: () => void; onSaved: (goals: Goals) => void }) {
++function GoalEditor({ goals, profile, onClose, onSaved }: { goals: Goals; profile: Profile; onClose: () => void; onSaved: (goals: Goals) => void }) {
+   const [busy, setBusy] = useState(false);
+-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget); const next = { calories: Number(form.get("calories")), protein: Number(form.get("protein")), fat: Number(form.get("fat")), netCarbs: Number(form.get("netCarbs")) }; const response = await fetch("/api/goals", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }); if (response.ok) onSaved(next); else setBusy(false); }
+-  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Personalize</p><h2>Daily goals</h2></div><button onClick={onClose}>×</button></div><form onSubmit={submit} className="food-form"><div className="form-grid"><label>Calories<input name="calories" type="number" min="1" defaultValue={goals.calories} /></label><label>Net carbs (g)<input name="netCarbs" type="number" min="1" defaultValue={goals.netCarbs} /></label><label>Protein (g)<input name="protein" type="number" min="1" defaultValue={goals.protein} /></label><label>Fat (g)<input name="fat" type="number" min="1" defaultValue={goals.fat} /></label></div><button className="primary" disabled={busy}>{busy ? "Saving…" : "Save goals"}</button></form></div></div>;
++  async function submit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget);
++    const next = { calories: Number(form.get("calories")), protein: Number(form.get("protein")), fat: Number(form.get("fat")), netCarbs: Number(form.get("netCarbs")), waterOunces: Number(form.get("waterOunces")) };
++    const response = await fetch("/api/goals", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify(next) });
++    if (response.ok) onSaved(next); else setBusy(false);
++  }
++  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Personalize</p><h2>Daily goals</h2></div><button onClick={onClose}>×</button></div><form onSubmit={submit} className="food-form"><div className="form-grid"><label>Calories<input name="calories" type="number" min="1" defaultValue={goals.calories} /></label><label>Net carbs (g)<input name="netCarbs" type="number" min="1" defaultValue={goals.netCarbs} /></label><label>Protein (g)<input name="protein" type="number" min="1" defaultValue={goals.protein} /></label><label>Fat (g)<input name="fat" type="number" min="1" defaultValue={goals.fat} /></label><label>Water (oz)<input name="waterOunces" type="number" min="1" defaultValue={goals.waterOunces} /></label></div><button className="primary" disabled={busy}>{busy ? "Saving…" : "Save goals"}</button></form></div></div>;
++}
++
++function CustomWater({ onClose, onAdd }: { onClose: () => void; onAdd: (ounces: number) => void }) {
++  function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const ounces = Number(new FormData(event.currentTarget).get("ounces")); if (ounces > 0) onAdd(ounces); }
++  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Hydration</p><h2>Add water</h2></div><button onClick={onClose}>×</button></div><form className="food-form" onSubmit={submit}><label>Number of ounces<input name="ounces" type="number" min="1" max="256" step="1" required autoFocus /></label><button className="primary">Add water</button></form></div></div>;
+ }
+diff --git a/app/globals.css b/app/globals.css
+index 61ae12f..c2f730e 100644
+--- a/app/globals.css
++++ b/app/globals.css
+@@ -14,6 +14,9 @@ h1 { font:600 29px/1 Georgia,serif; }
+ h2 { font:600 27px/1.1 Georgia,serif; }
+ .eyebrow { margin-bottom:4px; color:var(--sage-dark); font-size:10px; font-weight:800; letter-spacing:.15em; text-transform:uppercase; }
+ .icon-button { margin-left:auto; border:0; background:#e8ece7; width:42px; height:42px; border-radius:50%; font-size:18px; cursor:pointer; }
++.profile-button { margin-left:auto; display:flex; align-items:center; gap:6px; padding:5px 9px 5px 5px; border:1px solid #dce3dd; border-radius:30px; background:#fffdf9; font-size:11px; font-weight:700; cursor:pointer; }
++.profile-button span { width:28px; height:28px; display:grid; place-items:center; border-radius:50%; background:var(--sage-dark); color:white; }
++.profile-button+.icon-button { margin-left:0; }
+ .date-nav { display:grid; grid-template-columns:45px 1fr 45px; align-items:center; margin-bottom:18px; }
+ .date-nav>button { border:0; background:transparent; cursor:pointer; font-size:31px; }
+ .date-button { display:flex; flex-direction:column; align-items:center; gap:2px; }
+@@ -49,6 +52,12 @@ h2 { font:600 27px/1.1 Georgia,serif; }
+ .food-row div { display:flex; flex-direction:column; gap:3px; min-width:0; }.food-row strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.food-row span{color:var(--muted);font-size:11px}.food-row b{font-size:13px}.food-row button{border:0;background:transparent;color:#a0a7a2;font-size:19px;cursor:pointer}
+ .empty-state,.notice { width:100%; padding:22px; border:1px solid #e4e0d6; border-radius:18px; background:white; text-align:center; color:var(--muted); }
+ .notice { margin-bottom:15px; cursor:pointer; color:#9b584b; background:#fff1ed; }
++.water-card { margin:0 0 30px; padding:20px; border:1px solid #dbe8e9; border-radius:22px; background:linear-gradient(145deg,#f9ffff,#e9f5f5); box-shadow:0 7px 22px rgba(50,90,93,.06); }
++.water-heading { display:flex; align-items:center; gap:12px; }.water-heading h2{font-size:22px}.water-heading h2 small{color:#708588;font:500 12px Arial,sans-serif}.water-drop{width:42px;height:42px;display:grid;place-items:center;border-radius:50% 50% 50% 8px;transform:rotate(-45deg);background:#8ec4ca;color:white;font-size:21px}.water-drop::first-letter{transform:rotate(45deg)}
++.water-progress{height:8px;margin:15px 0;overflow:hidden;border-radius:10px;background:#dcebec}.water-progress i{display:block;height:100%;border-radius:10px;background:#67aeb7}
++.water-buttons{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.water-buttons button{padding:10px 5px;border:1px solid #cfe1e2;border-radius:11px;background:white;color:#3e747a;font-size:11px;font-weight:800;cursor:pointer}
++.water-history{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.water-history button{padding:5px 8px;border:0;border-radius:20px;background:#dcecef;color:#50777b;font-size:10px;cursor:pointer}
++.profile-screen{min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 20% 10%,#e0ebe2,transparent 35rem),var(--cream)}.profile-panel{width:min(100%,480px);padding:36px;border:1px solid #e3dfd4;border-radius:28px;background:var(--card);text-align:center;box-shadow:0 20px 60px rgba(37,51,45,.12)}.profile-panel .brand-mark{margin:0 auto 20px}.brand-mark.large{width:60px;height:60px;font-size:31px}.profile-panel h1{font-size:34px}.profile-panel>p:not(.eyebrow){margin:10px auto 25px;max-width:330px;color:var(--muted);font-size:13px;line-height:1.5}.profile-options{display:grid;grid-template-columns:1fr 1fr;gap:12px}.profile-options button{display:flex;flex-direction:column;align-items:center;gap:10px;padding:22px;border:1px solid #dce3dd;border-radius:18px;background:white;cursor:pointer}.profile-options button:hover{border-color:var(--sage);background:#f2f7f3}.profile-options span{width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--sage-dark);color:white;font-size:20px}.profile-options strong{font-size:15px}
+ .floating-add { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); display:flex; align-items:center; gap:7px; padding:13px 22px; border:0; border-radius:50px; background:var(--ink); color:white; font-weight:700; box-shadow:0 10px 28px rgba(37,51,45,.3); cursor:pointer; z-index:5; }
+ .floating-add span { font-size:18px; }
+ .modal-backdrop { position:fixed; inset:0; display:flex; align-items:flex-end; justify-content:center; padding:20px; background:rgba(24,33,29,.5); backdrop-filter:blur(4px); z-index:20; }
+@@ -60,12 +69,14 @@ h2 { font:600 27px/1.1 Georgia,serif; }
+ .food-form { display:flex; flex-direction:column; gap:14px; }
+ .food-search { display:grid; grid-template-columns:1fr auto; gap:8px; margin-bottom:10px; }.food-search input{min-width:0;padding:12px 13px;border:1px solid #d9d6cd;border-radius:12px;background:white;outline:none}.food-search button{padding:0 15px;border:0;border-radius:12px;background:var(--sage-dark);color:white;font-weight:700;cursor:pointer}
+ .search-results{display:flex;max-height:210px;overflow:auto;flex-direction:column;margin:0 0 12px;border:1px solid #e2ded3;border-radius:14px;background:white}.search-results button{display:flex;flex-direction:column;gap:4px;padding:11px 13px;border:0;border-bottom:1px solid #eeeae0;background:white;text-align:left;cursor:pointer}.search-results button:last-child{border-bottom:0}.search-results strong{font-size:12px}.search-results span{color:var(--muted);font-size:10px}
++.field-heading{margin:0 0 7px;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.saved-foods{display:flex;gap:7px;overflow-x:auto;margin-bottom:14px;padding-bottom:4px}.saved-foods button{flex:0 0 auto;display:flex;flex-direction:column;gap:3px;padding:9px 11px;border:1px solid #dce3dd;border-radius:11px;background:#f8fbf8;text-align:left;cursor:pointer}.saved-foods strong{font-size:11px}.saved-foods span{color:var(--muted);font-size:9px}
+ .food-form label { display:flex; flex-direction:column; gap:6px; color:#4a574f; font-size:11px; font-weight:700; }
+ .food-form input { width:100%; padding:12px 13px; border:1px solid #dcd9d0; border-radius:11px; background:white; outline:none; }
+ .food-form input:focus { border-color:var(--sage); box-shadow:0 0 0 3px rgba(115,150,133,.13); }
+ .form-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
++.food-form .checkbox-row{flex-direction:row;align-items:center;gap:8px}.food-form .checkbox-row input{width:17px;height:17px}.food-form .checkbox-row span{font-size:12px}
+ .primary { padding:14px; border:0; border-radius:13px; background:var(--ink); color:white; font-weight:800; cursor:pointer; }.primary:disabled{opacity:.6}
+ .form-error { color:#af5143; font-size:12px; }
+ @media(min-width:700px){.app-shell{padding-top:40px}.modal-backdrop{align-items:center}.modal{border-radius:26px}.meals-section{display:grid;grid-template-columns:1fr 1fr;gap:12px}.section-heading{grid-column:1/-1}.meal-card{margin:0}}
+-@media(max-width:430px){.app-shell{padding:20px 14px 100px}.summary-card{padding:19px;gap:17px}.calorie-ring{flex-basis:103px;height:103px}.calorie-ring>div{width:80px;height:80px}.calorie-ring strong{font-size:26px}.summary-copy>strong{font-size:19px}.macro{padding:13px 10px}.macro-label b{font-size:17px}.form-grid{gap:9px}.modal-backdrop{padding:0}.modal{border-radius:26px 26px 0 0}}
++@media(max-width:430px){.app-shell{padding:20px 14px 100px}.summary-card{padding:19px;gap:17px}.calorie-ring{flex-basis:103px;height:103px}.calorie-ring>div{width:80px;height:80px}.calorie-ring strong{font-size:26px}.summary-copy>strong{font-size:19px}.macro{padding:13px 10px}.macro-label b{font-size:17px}.form-grid{gap:9px}.modal-backdrop{padding:0}.modal{border-radius:26px 26px 0 0}.water-buttons{grid-template-columns:repeat(2,1fr)}.profile-button{font-size:0;padding-right:5px}.profile-options{grid-template-columns:1fr}.profile-panel{padding:28px 22px}}
+ @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+diff --git a/db/schema.ts b/db/schema.ts
+index ef76af1..8c60f4c 100644
+--- a/db/schema.ts
++++ b/db/schema.ts
+@@ -16,5 +16,27 @@ export const nutritionGoals = sqliteTable("nutrition_goals", {
+   owner: text("owner").notNull(), calories: integer("calories").notNull().default(1600),
+   protein: real("protein").notNull().default(110), fat: real("fat").notNull().default(105),
+   netCarbs: real("net_carbs").notNull().default(25),
++  waterOunces: real("water_ounces").notNull().default(64),
+   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+ }, table => [uniqueIndex("nutrition_goals_owner_idx").on(table.owner)]);
++
++export const waterEntries = sqliteTable("water_entries", {
++  id: integer("id").primaryKey({ autoIncrement: true }),
++  owner: text("owner").notNull(),
++  drankOn: text("drank_on").notNull(),
++  ounces: real("ounces").notNull(),
++  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
++});
++
++export const customFoods = sqliteTable("custom_foods", {
++  id: integer("id").primaryKey({ autoIncrement: true }),
++  owner: text("owner").notNull(),
++  name: text("name").notNull(),
++  serving: text("serving").notNull(),
++  calories: real("calories").notNull(),
++  protein: real("protein").notNull(),
++  fat: real("fat").notNull(),
++  carbs: real("carbs").notNull(),
++  fiber: real("fiber").notNull().default(0),
++  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
++}, table => [uniqueIndex("custom_foods_owner_name_serving_idx").on(table.owner, table.name, table.serving)]);
+diff --git a/drizzle/0001_profiles_water_custom_foods.sql b/drizzle/0001_profiles_water_custom_foods.sql
+new file mode 100644
+index 0000000..a55b476
+--- /dev/null
++++ b/drizzle/0001_profiles_water_custom_foods.sql
+@@ -0,0 +1,28 @@
++ALTER TABLE `nutrition_goals` ADD `water_ounces` real DEFAULT 64 NOT NULL;
++--> statement-breakpoint
++UPDATE `food_entries` SET `owner` = 'chris' WHERE `owner` NOT IN ('chris', 'sarah');
++--> statement-breakpoint
++UPDATE `nutrition_goals` SET `owner` = 'chris' WHERE `owner` NOT IN ('chris', 'sarah');
++--> statement-breakpoint
++CREATE TABLE `water_entries` (
++  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
++  `owner` text NOT NULL,
++  `drank_on` text NOT NULL,
++  `ounces` real NOT NULL,
++  `created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
++);
++--> statement-breakpoint
++CREATE TABLE `custom_foods` (
++  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
++  `owner` text NOT NULL,
++  `name` text NOT NULL,
++  `serving` text NOT NULL,
++  `calories` real NOT NULL,
++  `protein` real NOT NULL,
++  `fat` real NOT NULL,
++  `carbs` real NOT NULL,
++  `fiber` real DEFAULT 0 NOT NULL,
++  `created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
++);
++--> statement-breakpoint
++CREATE UNIQUE INDEX `custom_foods_owner_name_serving_idx` ON `custom_foods` (`owner`, `name`, `serving`);
