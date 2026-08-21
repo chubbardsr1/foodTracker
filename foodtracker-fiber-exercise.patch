@@ -1,0 +1,299 @@
+diff --git a/app/api/goals/route.ts b/app/api/goals/route.ts
+index 1696a4b..53594ea 100644
+--- a/app/api/goals/route.ts
++++ b/app/api/goals/route.ts
+@@ -6,7 +6,7 @@ import { profileFrom } from "../profile";
+ export async function PUT(request: Request) {
+   try {
+     const payload = await request.json() as Record<string, unknown>;
+-    const goals = { calories: Number(payload.calories), protein: Number(payload.protein), fat: Number(payload.fat), netCarbs: Number(payload.netCarbs), waterOunces: Number(payload.waterOunces) };
++    const goals = { calories: Number(payload.calories), protein: Number(payload.protein), fat: Number(payload.fat), netCarbs: Number(payload.netCarbs), fiber: Number(payload.fiber), waterOunces: Number(payload.waterOunces) };
+     if (Object.values(goals).some(value => !Number.isFinite(value) || value <= 0)) return Response.json({ error: "Every goal must be greater than zero" }, { status: 400 });
+     const db = getDb(); const owner = profileFrom(request);
+     const existing = await db.select({ id: nutritionGoals.id }).from(nutritionGoals).where(eq(nutritionGoals.owner, owner)).limit(1);
+diff --git a/app/food-tracker.tsx b/app/food-tracker.tsx
+index 681cde0..b89f7d7 100644
+--- a/app/food-tracker.tsx
++++ b/app/food-tracker.tsx
+@@ -6,11 +6,12 @@ type Profile = "chris" | "sarah";
+ type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
+ type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
+ type WaterEntry = { id: number; drankOn: string; ounces: number };
++type ExerciseEntry = { id: number; exercisedOn: string; activity: string; minutes: number; calories: number };
+ type Food = { id: number; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
+-type Goals = { calories: number; protein: number; fat: number; netCarbs: number; waterOunces: number };
++type Goals = { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number };
+ 
+ const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
+-const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, waterOunces: 64 };
++const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, fiber: 25, waterOunces: 64 };
+ const profileNames: Record<Profile, string> = { chris: "Chris", sarah: "Sarah" };
+ function localDate() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+ function round(value: number) { return Math.round(value * 10) / 10; }
+@@ -20,11 +21,13 @@ export default function FoodTracker() {
+   const [date, setDate] = useState(localDate());
+   const [entries, setEntries] = useState<Entry[]>([]);
+   const [water, setWater] = useState<WaterEntry[]>([]);
++  const [exercise, setExercise] = useState<ExerciseEntry[]>([]);
+   const [goals, setGoals] = useState<Goals>(defaultGoals);
+   const [loading, setLoading] = useState(true);
+   const [modalMeal, setModalMeal] = useState<Meal | null>(null);
+   const [goalOpen, setGoalOpen] = useState(false);
+   const [customWaterOpen, setCustomWaterOpen] = useState(false);
++  const [exerciseOpen, setExerciseOpen] = useState(false);
+   const [message, setMessage] = useState("");
+ 
+   useEffect(() => {
+@@ -33,22 +36,29 @@ export default function FoodTracker() {
+     else setLoading(false);
+   }, []);
+ 
+-  const headers = useMemo(() => profile ? { "x-food-tracker-profile": profile } : {}, [profile]);
++  const headers = useMemo((): Record<string, string> => {
++    if (!profile) return {};
++    return { "x-food-tracker-profile": profile };
++  }, [profile]);
+ 
+   async function loadDay(day: string) {
+     if (!profile) return;
+     setLoading(true);
+     try {
+-      const [foodResponse, waterResponse] = await Promise.all([
++      const [foodResponse, waterResponse, exerciseResponse] = await Promise.all([
+         fetch(`/api/entries?date=${day}`, { headers }),
+         fetch(`/api/water?date=${day}`, { headers }),
++        fetch(`/api/exercise?date=${day}`, { headers }),
+       ]);
+       const foodData = await foodResponse.json();
+       const waterData = await waterResponse.json();
++      const exerciseData = await exerciseResponse.json();
+       if (!foodResponse.ok) throw new Error(foodData.error ?? "Unable to load entries");
+       if (!waterResponse.ok) throw new Error(waterData.error ?? "Unable to load water");
++      if (!exerciseResponse.ok) throw new Error(exerciseData.error ?? "Unable to load exercise");
+       setEntries(foodData.entries ?? []);
+       setWater(waterData.entries ?? []);
++      setExercise(exerciseData.entries ?? []);
+       setGoals({ ...defaultGoals, ...(foodData.goals ?? {}) });
+     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load this day"); }
+     finally { setLoading(false); }
+@@ -61,10 +71,12 @@ export default function FoodTracker() {
+     netCarbs: sum.netCarbs + Math.max(0, item.carbs - item.fiber),
+   }), { calories: 0, protein: 0, fat: 0, carbs: 0, fiber: 0, netCarbs: 0 }), [entries]);
+   const waterTotal = water.reduce((sum, item) => sum + item.ounces, 0);
++  const exerciseMinutes = exercise.reduce((sum, item) => sum + item.minutes, 0);
++  const exerciseCalories = exercise.reduce((sum, item) => sum + item.calories, 0);
+ 
+   function selectProfile(next: Profile) {
+     window.localStorage.setItem("foodTrackerProfile", next);
+-    setEntries([]); setWater([]); setGoals(defaultGoals); setProfile(next);
++    setEntries([]); setWater([]); setExercise([]); setGoals(defaultGoals); setProfile(next);
+   }
+   function shiftDate(days: number) {
+     const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + days);
+@@ -87,6 +99,10 @@ export default function FoodTracker() {
+     const response = await fetch(`/api/water?id=${id}`, { method: "DELETE", headers });
+     if (response.ok) setWater(current => current.filter(item => item.id !== id));
+   }
++  async function removeExercise(id: number) {
++    const response = await fetch(`/api/exercise?id=${id}`, { method: "DELETE", headers });
++    if (response.ok) setExercise(current => current.filter(item => item.id !== id));
++  }
+ 
+   if (!profile) return <ProfileChooser onSelect={selectProfile} />;
+ 
+@@ -115,6 +131,12 @@ export default function FoodTracker() {
+       <Macro label="Net carbs" value={round(totals.netCarbs)} goal={goals.netCarbs} color="purple" />
+       <Macro label="Protein" value={round(totals.protein)} goal={goals.protein} color="coral" />
+       <Macro label="Fat" value={round(totals.fat)} goal={goals.fat} color="gold" />
++      <Macro label="Fiber" value={round(totals.fiber)} goal={goals.fiber} color="green" />
++    </section>
++    <section className="exercise-card">
++      <div className="exercise-heading"><div className="exercise-icon">↗</div><div><p className="eyebrow">Movement</p><h2>{round(exerciseMinutes)} <small>minutes</small></h2></div><button onClick={() => setExerciseOpen(true)}>+ Add exercise</button></div>
++      <p className="exercise-summary">{exerciseCalories > 0 ? `${Math.round(exerciseCalories)} estimated calories burned` : exercise.length > 0 ? "Exercise logged for today" : "No exercise logged yet"}</p>
++      {exercise.length > 0 && <div className="exercise-history">{exercise.map(item => <div key={item.id}><span><strong>{item.activity}</strong><small>{round(item.minutes)} min{item.calories > 0 ? ` · ${Math.round(item.calories)} cal` : ""}</small></span><button onClick={() => void removeExercise(item.id)} aria-label={`Remove ${item.activity}`}>×</button></div>)}</div>}
+     </section>
+     <section className="water-card">
+       <div className="water-heading"><div className="water-drop">◒</div><div><p className="eyebrow">Hydration</p><h2>{round(waterTotal)} <small>of {goals.waterOunces} oz</small></h2></div></div>
+@@ -140,11 +162,12 @@ export default function FoodTracker() {
+     {modalMeal && <AddFood meal={modalMeal} date={date} profile={profile} onClose={() => setModalMeal(null)} onSaved={(entry) => { setEntries(current => [...current, entry]); setModalMeal(null); }} />}
+     {goalOpen && <GoalEditor goals={goals} profile={profile} onClose={() => setGoalOpen(false)} onSaved={(next) => { setGoals(next); setGoalOpen(false); }} />}
+     {customWaterOpen && <CustomWater onClose={() => setCustomWaterOpen(false)} onAdd={(ounces) => { void addWater(ounces); setCustomWaterOpen(false); }} />}
++    {exerciseOpen && <AddExercise date={date} profile={profile} onClose={() => setExerciseOpen(false)} onSaved={(entry) => { setExercise(current => [...current, entry]); setExerciseOpen(false); }} />}
+   </main>;
+ }
+ 
+ function ProfileChooser({ onSelect }: { onSelect: (profile: Profile) => void }) {
+-  return <main className="profile-screen"><div className="profile-panel"><div className="brand-mark large">N</div><p className="eyebrow">Daily Food Tracker</p><h1>Who is tracking?</h1><p>Your food, goals, water, and custom foods stay in your own profile.</p><div className="profile-options"><button onClick={() => onSelect("chris")}><span>C</span><strong>Chris</strong></button><button onClick={() => onSelect("sarah")}><span>S</span><strong>Sarah</strong></button></div></div></main>;
++  return <main className="profile-screen"><div className="profile-panel"><div className="brand-mark large">N</div><p className="eyebrow">Daily Food Tracker</p><h1>Who is tracking?</h1><p>Your food, goals, water, exercise, and custom foods stay in your own profile.</p><div className="profile-options"><button onClick={() => onSelect("chris")}><span>C</span><strong>Chris</strong></button><button onClick={() => onSelect("sarah")}><span>S</span><strong>Sarah</strong></button></div></div></main>;
+ }
+ 
+ function Macro({ label, value, goal, color }: { label: string; value: number; goal: number; color: string }) {
+@@ -185,14 +208,30 @@ function GoalEditor({ goals, profile, onClose, onSaved }: { goals: Goals; profil
+   const [busy, setBusy] = useState(false);
+   async function submit(event: FormEvent<HTMLFormElement>) {
+     event.preventDefault(); setBusy(true); const form = new FormData(event.currentTarget);
+-    const next = { calories: Number(form.get("calories")), protein: Number(form.get("protein")), fat: Number(form.get("fat")), netCarbs: Number(form.get("netCarbs")), waterOunces: Number(form.get("waterOunces")) };
++    const next = { calories: Number(form.get("calories")), protein: Number(form.get("protein")), fat: Number(form.get("fat")), netCarbs: Number(form.get("netCarbs")), fiber: Number(form.get("fiber")), waterOunces: Number(form.get("waterOunces")) };
+     const response = await fetch("/api/goals", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify(next) });
+     if (response.ok) onSaved(next); else setBusy(false);
+   }
+-  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Personalize</p><h2>Daily goals</h2></div><button onClick={onClose}>×</button></div><form onSubmit={submit} className="food-form"><div className="form-grid"><label>Calories<input name="calories" type="number" min="1" defaultValue={goals.calories} /></label><label>Net carbs (g)<input name="netCarbs" type="number" min="1" defaultValue={goals.netCarbs} /></label><label>Protein (g)<input name="protein" type="number" min="1" defaultValue={goals.protein} /></label><label>Fat (g)<input name="fat" type="number" min="1" defaultValue={goals.fat} /></label><label>Water (oz)<input name="waterOunces" type="number" min="1" defaultValue={goals.waterOunces} /></label></div><button className="primary" disabled={busy}>{busy ? "Saving…" : "Save goals"}</button></form></div></div>;
++  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Personalize</p><h2>Daily goals</h2></div><button onClick={onClose}>×</button></div><form onSubmit={submit} className="food-form"><div className="form-grid"><label>Calories<input name="calories" type="number" min="1" defaultValue={goals.calories} /></label><label>Net carbs (g)<input name="netCarbs" type="number" min="1" defaultValue={goals.netCarbs} /></label><label>Protein (g)<input name="protein" type="number" min="1" defaultValue={goals.protein} /></label><label>Fat (g)<input name="fat" type="number" min="1" defaultValue={goals.fat} /></label><label>Fiber (g)<input name="fiber" type="number" min="1" defaultValue={goals.fiber} /></label><label>Water (oz)<input name="waterOunces" type="number" min="1" defaultValue={goals.waterOunces} /></label></div><button className="primary" disabled={busy}>{busy ? "Saving…" : "Save goals"}</button></form></div></div>;
+ }
+ 
+ function CustomWater({ onClose, onAdd }: { onClose: () => void; onAdd: (ounces: number) => void }) {
+   function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const ounces = Number(new FormData(event.currentTarget).get("ounces")); if (ounces > 0) onAdd(ounces); }
+   return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Hydration</p><h2>Add water</h2></div><button onClick={onClose}>×</button></div><form className="food-form" onSubmit={submit}><label>Number of ounces<input name="ounces" type="number" min="1" max="256" step="1" required autoFocus /></label><button className="primary">Add water</button></form></div></div>;
+ }
++
++function AddExercise({ date, profile, onClose, onSaved }: { date: string; profile: Profile; onClose: () => void; onSaved: (entry: ExerciseEntry) => void }) {
++  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
++  async function submit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault(); setBusy(true); setError("");
++    const form = new FormData(event.currentTarget);
++    const response = await fetch("/api/exercise", {
++      method: "POST", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" },
++      body: JSON.stringify({ exercisedOn: date, activity: form.get("activity"), minutes: Number(form.get("minutes")), calories: Number(form.get("calories") || 0) }),
++    });
++    const result = await response.json();
++    if (!response.ok) { setError(result.error ?? "Unable to add exercise"); setBusy(false); return; }
++    onSaved(result.entry);
++  }
++  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Movement</p><h2>Add exercise</h2></div><button onClick={onClose}>×</button></div><form className="food-form" onSubmit={submit}><label>Activity<input name="activity" placeholder="e.g. Walking" maxLength={100} required autoFocus /></label><div className="form-grid"><label>Minutes<input name="minutes" type="number" min="1" max="1440" step="1" required /></label><label>Calories burned (optional)<input name="calories" type="number" min="0" max="10000" step="1" /></label></div>{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Add exercise"}</button></form></div></div>;
++}
+diff --git a/app/globals.css b/app/globals.css
+index c2f730e..9cd0146 100644
+--- a/app/globals.css
++++ b/app/globals.css
+@@ -32,13 +32,13 @@ h2 { font:600 27px/1.1 Georgia,serif; }
+ .summary-copy>span { font-size:10px; letter-spacing:.15em; opacity:.72; }
+ .summary-copy>strong { margin:7px 0 4px; font:600 22px/1.15 Georgia,serif; }
+ .summary-copy small { opacity:.8; }
+-.macro-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:11px; margin:14px 0 30px; }
++.macro-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:11px; margin:14px 0 30px; }
+ .macro { padding:16px 14px 13px; border:1px solid #e7e4db; border-radius:18px; background:rgba(255,253,249,.84); }
+ .macro-label { display:flex; flex-direction:column; gap:6px; }
+ .macro-label span,.macro small { color:var(--muted); font-size:11px; }
+ .macro-label b { font:600 19px Georgia,serif; }
+ .progress { height:5px; margin:11px 0 7px; overflow:hidden; border-radius:9px; background:#e8e6df; }
+-.progress i { display:block; height:100%; border-radius:9px; }.progress .purple{background:var(--purple)}.progress .coral{background:var(--coral)}.progress .gold{background:var(--gold)}
++.progress i { display:block; height:100%; border-radius:9px; }.progress .purple{background:var(--purple)}.progress .coral{background:var(--coral)}.progress .gold{background:var(--gold)}.progress .green{background:var(--sage)}
+ .section-heading { display:flex; align-items:end; justify-content:space-between; margin-bottom:13px; }
+ .section-heading>span { color:var(--muted); font-size:12px; }
+ .meal-card { margin-bottom:12px; border:1px solid #e8e4d9; border-radius:21px; background:var(--card); box-shadow:0 7px 22px rgba(50,60,53,.055); overflow:hidden; }
+@@ -57,6 +57,9 @@ h2 { font:600 27px/1.1 Georgia,serif; }
+ .water-progress{height:8px;margin:15px 0;overflow:hidden;border-radius:10px;background:#dcebec}.water-progress i{display:block;height:100%;border-radius:10px;background:#67aeb7}
+ .water-buttons{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.water-buttons button{padding:10px 5px;border:1px solid #cfe1e2;border-radius:11px;background:white;color:#3e747a;font-size:11px;font-weight:800;cursor:pointer}
+ .water-history{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}.water-history button{padding:5px 8px;border:0;border-radius:20px;background:#dcecef;color:#50777b;font-size:10px;cursor:pointer}
++.exercise-card{margin:0 0 14px;padding:20px;border:1px solid #e2dfeb;border-radius:22px;background:linear-gradient(145deg,#fff,#f1eef7);box-shadow:0 7px 22px rgba(70,55,95,.06)}
++.exercise-heading{display:flex;align-items:center;gap:12px}.exercise-heading h2{font-size:22px}.exercise-heading h2 small{color:#7f768d;font:500 12px Arial,sans-serif}.exercise-heading>button{margin-left:auto;padding:10px 12px;border:1px solid #d9d2e5;border-radius:11px;background:white;color:#6d5c88;font-size:11px;font-weight:800;cursor:pointer}.exercise-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:14px;background:#8a78a8;color:white;font-size:22px;font-weight:800}
++.exercise-summary{margin:13px 0 0;color:var(--muted);font-size:11px}.exercise-history{display:flex;flex-direction:column;margin-top:12px;border-top:1px solid #e5e0ec}.exercise-history>div{display:flex;align-items:center;padding:10px 0;border-bottom:1px solid #e9e5ee}.exercise-history span{display:flex;flex:1;flex-direction:column;gap:3px}.exercise-history strong{font-size:12px}.exercise-history small{color:var(--muted);font-size:10px}.exercise-history button{border:0;background:transparent;color:#9b91a8;font-size:19px;cursor:pointer}
+ .profile-screen{min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 20% 10%,#e0ebe2,transparent 35rem),var(--cream)}.profile-panel{width:min(100%,480px);padding:36px;border:1px solid #e3dfd4;border-radius:28px;background:var(--card);text-align:center;box-shadow:0 20px 60px rgba(37,51,45,.12)}.profile-panel .brand-mark{margin:0 auto 20px}.brand-mark.large{width:60px;height:60px;font-size:31px}.profile-panel h1{font-size:34px}.profile-panel>p:not(.eyebrow){margin:10px auto 25px;max-width:330px;color:var(--muted);font-size:13px;line-height:1.5}.profile-options{display:grid;grid-template-columns:1fr 1fr;gap:12px}.profile-options button{display:flex;flex-direction:column;align-items:center;gap:10px;padding:22px;border:1px solid #dce3dd;border-radius:18px;background:white;cursor:pointer}.profile-options button:hover{border-color:var(--sage);background:#f2f7f3}.profile-options span{width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--sage-dark);color:white;font-size:20px}.profile-options strong{font-size:15px}
+ .floating-add { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); display:flex; align-items:center; gap:7px; padding:13px 22px; border:0; border-radius:50px; background:var(--ink); color:white; font-weight:700; box-shadow:0 10px 28px rgba(37,51,45,.3); cursor:pointer; z-index:5; }
+ .floating-add span { font-size:18px; }
+@@ -78,5 +81,6 @@ h2 { font:600 27px/1.1 Georgia,serif; }
+ .primary { padding:14px; border:0; border-radius:13px; background:var(--ink); color:white; font-weight:800; cursor:pointer; }.primary:disabled{opacity:.6}
+ .form-error { color:#af5143; font-size:12px; }
+ @media(min-width:700px){.app-shell{padding-top:40px}.modal-backdrop{align-items:center}.modal{border-radius:26px}.meals-section{display:grid;grid-template-columns:1fr 1fr;gap:12px}.section-heading{grid-column:1/-1}.meal-card{margin:0}}
+-@media(max-width:430px){.app-shell{padding:20px 14px 100px}.summary-card{padding:19px;gap:17px}.calorie-ring{flex-basis:103px;height:103px}.calorie-ring>div{width:80px;height:80px}.calorie-ring strong{font-size:26px}.summary-copy>strong{font-size:19px}.macro{padding:13px 10px}.macro-label b{font-size:17px}.form-grid{gap:9px}.modal-backdrop{padding:0}.modal{border-radius:26px 26px 0 0}.water-buttons{grid-template-columns:repeat(2,1fr)}.profile-button{font-size:0;padding-right:5px}.profile-options{grid-template-columns:1fr}.profile-panel{padding:28px 22px}}
++@media(max-width:560px){.macro-grid{grid-template-columns:repeat(2,1fr)}}
++@media(max-width:430px){.app-shell{padding:20px 14px 100px}.summary-card{padding:19px;gap:17px}.calorie-ring{flex-basis:103px;height:103px}.calorie-ring>div{width:80px;height:80px}.calorie-ring strong{font-size:26px}.summary-copy>strong{font-size:19px}.macro{padding:13px 10px}.macro-label b{font-size:17px}.form-grid{gap:9px}.modal-backdrop{padding:0}.modal{border-radius:26px 26px 0 0}.water-buttons{grid-template-columns:repeat(2,1fr)}.exercise-heading{align-items:flex-start;flex-wrap:wrap}.exercise-heading>button{margin-left:54px}.profile-button{font-size:0;padding-right:5px}.profile-options{grid-template-columns:1fr}.profile-panel{padding:28px 22px}}
+ @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+diff --git a/db/schema.ts b/db/schema.ts
+index 8c60f4c..72d152d 100644
+--- a/db/schema.ts
++++ b/db/schema.ts
+@@ -16,6 +16,7 @@ export const nutritionGoals = sqliteTable("nutrition_goals", {
+   owner: text("owner").notNull(), calories: integer("calories").notNull().default(1600),
+   protein: real("protein").notNull().default(110), fat: real("fat").notNull().default(105),
+   netCarbs: real("net_carbs").notNull().default(25),
++  fiber: real("fiber_goal").notNull().default(25),
+   waterOunces: real("water_ounces").notNull().default(64),
+   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+ }, table => [uniqueIndex("nutrition_goals_owner_idx").on(table.owner)]);
+@@ -28,6 +29,16 @@ export const waterEntries = sqliteTable("water_entries", {
+   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+ });
+ 
++export const exerciseEntries = sqliteTable("exercise_entries", {
++  id: integer("id").primaryKey({ autoIncrement: true }),
++  owner: text("owner").notNull(),
++  exercisedOn: text("exercised_on").notNull(),
++  activity: text("activity").notNull(),
++  minutes: real("minutes").notNull(),
++  calories: real("calories").notNull().default(0),
++  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
++});
++
+ export const customFoods = sqliteTable("custom_foods", {
+   id: integer("id").primaryKey({ autoIncrement: true }),
+   owner: text("owner").notNull(),
+diff --git a/app/api/exercise/route.ts b/app/api/exercise/route.ts
+new file mode 100644
+index 0000000..6d98d31
+--- /dev/null
++++ b/app/api/exercise/route.ts
+@@ -0,0 +1,45 @@
++import { and, asc, eq } from "drizzle-orm";
++import { getDb } from "../../../db";
++import { exerciseEntries } from "../../../db/schema";
++import { profileFrom } from "../profile";
++
++export async function GET(request: Request) {
++  try {
++    const date = new URL(request.url).searchParams.get("date") ?? "";
++    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return Response.json({ error: "A valid date is required" }, { status: 400 });
++    const entries = await getDb().select().from(exerciseEntries)
++      .where(and(eq(exerciseEntries.owner, profileFrom(request)), eq(exerciseEntries.exercisedOn, date)))
++      .orderBy(asc(exerciseEntries.id));
++    return Response.json({ entries });
++  } catch (error) {
++    return Response.json({ error: error instanceof Error ? error.message : "Unable to load exercise" }, { status: 500 });
++  }
++}
++
++export async function POST(request: Request) {
++  try {
++    const payload = await request.json() as Record<string, unknown>;
++    const exercisedOn = String(payload.exercisedOn ?? "");
++    const activity = String(payload.activity ?? "").trim();
++    const minutes = Number(payload.minutes);
++    const calories = Number(payload.calories ?? 0);
++    if (!/^\d{4}-\d{2}-\d{2}$/.test(exercisedOn) || !activity || activity.length > 100 || !Number.isFinite(minutes) || minutes <= 0 || minutes > 1440 || !Number.isFinite(calories) || calories < 0 || calories > 10000) {
++      return Response.json({ error: "Enter an activity, valid minutes, and optional calories burned" }, { status: 400 });
++    }
++    const [entry] = await getDb().insert(exerciseEntries).values({ owner: profileFrom(request), exercisedOn, activity, minutes, calories }).returning();
++    return Response.json({ entry }, { status: 201 });
++  } catch (error) {
++    return Response.json({ error: error instanceof Error ? error.message : "Unable to add exercise" }, { status: 500 });
++  }
++}
++
++export async function DELETE(request: Request) {
++  try {
++    const id = Number(new URL(request.url).searchParams.get("id"));
++    if (!Number.isInteger(id)) return Response.json({ error: "A valid exercise entry is required" }, { status: 400 });
++    await getDb().delete(exerciseEntries).where(and(eq(exerciseEntries.id, id), eq(exerciseEntries.owner, profileFrom(request))));
++    return Response.json({ deleted: true });
++  } catch (error) {
++    return Response.json({ error: error instanceof Error ? error.message : "Unable to remove exercise" }, { status: 500 });
++  }
++}
+diff --git a/drizzle/0002_fiber_exercise.sql b/drizzle/0002_fiber_exercise.sql
+new file mode 100644
+index 0000000..0e0f9ee
+--- /dev/null
++++ b/drizzle/0002_fiber_exercise.sql
+@@ -0,0 +1,11 @@
++ALTER TABLE `nutrition_goals` ADD `fiber_goal` real DEFAULT 25 NOT NULL;
++--> statement-breakpoint
++CREATE TABLE `exercise_entries` (
++  `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
++  `owner` text NOT NULL,
++  `exercised_on` text NOT NULL,
++  `activity` text NOT NULL,
++  `minutes` real NOT NULL,
++  `calories` real DEFAULT 0 NOT NULL,
++  `created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
++);
+
