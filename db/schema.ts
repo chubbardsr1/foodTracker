@@ -24,6 +24,20 @@ export const nutritionGoals = sqliteTable("nutrition_goals", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, table => [uniqueIndex("nutrition_goals_owner_idx").on(table.owner)]);
 
+/**
+ * The calorie goal that was in force on a given day, frozen the first time
+ * anything is recorded for that day. Lets the goal change over time without
+ * rewriting how past days are judged.
+ */
+export const dailyGoals = sqliteTable("daily_goals", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  owner: text("owner").notNull(),
+  goalOn: text("goal_on").notNull(),
+  calories: integer("calories").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, table => [uniqueIndex("daily_goals_owner_day_idx").on(table.owner, table.goalOn)]);
+
 export const waterEntries = sqliteTable("water_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   owner: text("owner").notNull(),

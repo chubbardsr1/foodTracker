@@ -22,7 +22,13 @@ type ScannedProduct = {
   missing: string[]; source: string; attribution: string;
 };
 type Goals = { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number };
-type View = "diary" | "foods" | "reports";
+type View = "diary" | "foods" | "reports" | "calendar";
+type CalendarDay = {
+  date: string; calories: number; items: number; goalCalories: number; goalSource: "saved" | "current";
+  remaining: number; status: "none" | "under" | "over" | "way-over";
+  exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string;
+  hasMovement: boolean; hasData: boolean;
+};
 type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string };
 type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; daysInRange: number; daysWithFood: number; daysWithExercise: number };
 type ReportAverages = { caloriesPerDay: number; caloriesPerLoggedDay: number; exerciseMinutesPerDay: number };
@@ -33,8 +39,13 @@ const profileNames: Record<Profile, string> = { chris: "Chris", sarah: "Sarah" }
 const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "diary", label: "Diary", title: "Nourish", eyebrow: "Daily Food Tracker" },
   { id: "foods", label: "My Foods", title: "My Foods", eyebrow: "Reusable entries" },
+  { id: "calendar", label: "Calendar", title: "Calendar", eyebrow: "Day by day" },
   { id: "reports", label: "Reports", title: "Reports", eyebrow: "Calories & movement" },
 ];
+const weekdayInitials = ["S", "M", "T", "W", "T", "F", "S"];
+const statusLabels: Record<CalendarDay["status"], string> = {
+  none: "Nothing logged", under: "Under goal", over: "Over goal", "way-over": "More than 500 over",
+};
 function isoDate(value: Date) { return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`; }
 function localDate() { return isoDate(new Date()); }
 function addDays(date: string, days: number) { const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + days); return isoDate(next); }
@@ -43,6 +54,14 @@ function round(value: number) { return Math.round(value * 10) / 10; }
 function amount(value: number) { return String(Math.round(value * 100) / 100); }
 const nutritionLabels: Record<string, string> = { calories: "Calories", protein: "Protein", fat: "Fat", carbs: "Total carbs", fiber: "Fiber" };
 const barcodeDigits = (value: string) => value.replace(/\D/g, "");
+function monthKey(date: string) { return date.slice(0, 7); }
+function shiftMonth(month: string, step: number) {
+  const [year, index] = month.split("-").map(Number);
+  const moved = new Date(Date.UTC(year, index - 1 + step, 1));
+  return `${moved.getUTCFullYear()}-${String(moved.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+function monthLabel(month: string) { return new Date(`${month}-01T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" }); }
+function longDate(date: string) { return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }); }
 function shortDate(date: string) { return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
 function weekdayLabel(date: string) { return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short" }); }
 
@@ -152,6 +171,7 @@ export default function FoodTracker() {
     {message && <button className="notice" onClick={() => setMessage("")}>{message} ×</button>}
 
     {view === "foods" && <MyFoodsPage profile={profile} />}
+    {view === "calendar" && <CalendarPage profile={profile} onOpenDay={date => { setDate(date); setView("diary"); }} />}
     {view === "reports" && <ReportsPage profile={profile} />}
 
     {view === "diary" && <>
@@ -228,6 +248,120 @@ function MyFoodsPage({ profile }: { profile: Profile }) {
     {loading ? <div className="empty-state">Loading saved foods…</div> : foods.length === 0 ? <div className="empty-state">No saved foods yet.</div> : <div className="saved-food-list">{foods.map(food => <article className="saved-food-card" key={food.id}><div><strong>{food.name}</strong><span>{food.serving}</span><small>{round(food.calories)} cal · {round(food.protein)}g protein · {round(food.carbs - food.fiber)}g net carbs</small></div><button onClick={() => setEditing(food)}>Edit</button></article>)}</div>}
     {editing && <EditSavedFood food={editing} profile={profile} onClose={() => setEditing(null)} onSaved={(food) => { setFoods(current => current.map(item => item.id === food.id ? food : item)); setEditing(null); }} />}
   </section>;
+}
+
+function CalendarPage({ profile, onOpenDay }: { profile: Profile; onOpenDay: (date: string) => void }) {
+  const [month, setMonth] = useState(monthKey(localDate()));
+  const [data, setData] = useState<{ key: string; days: CalendarDay[]; currentGoal: number } | null>(null);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<CalendarDay | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
+  const requestKey = `${profile}:${month}:${reloadKey}`;
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/calendar?month=${month}`, { headers })
+      .then(async response => { const body = await response.json(); if (!response.ok) throw new Error(body.error ?? "Unable to load the calendar"); return body; })
+      .then(body => { if (!active) return; setError(""); setData({ key: requestKey, days: body.days ?? [], currentGoal: body.currentGoal ?? 0 }); })
+      .catch(reason => { if (!active) return; setError(reason instanceof Error ? reason.message : "Unable to load the calendar"); setData({ key: requestKey, days: [], currentGoal: 0 }); });
+    return () => { active = false; };
+  }, [requestKey, month, headers]);
+
+  const ready = data?.key === requestKey;
+  const days = ready ? data.days : [];
+  const loading = !ready;
+  const today = localDate();
+  const leading = days.length > 0 ? new Date(`${days[0].date}T12:00:00`).getDay() : 0;
+  const logged = days.filter(day => day.items > 0);
+  const moved = days.filter(day => day.hasMovement);
+
+  function refresh() { setReloadKey(current => current + 1); }
+
+  return <section className="calendar-page">
+    <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Calendar</h2></div><span>{logged.length} logged · {moved.length} active</span></div>
+    <p className="page-help">Each day is scored against the calorie goal that was saved for that day, so lowering your goal later never changes how past days look.</p>
+
+    <div className="calendar-nav">
+      <button type="button" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month">‹</button>
+      <strong>{monthLabel(month)}</strong>
+      <button type="button" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Next month">›</button>
+    </div>
+    <button type="button" className="calendar-today" onClick={() => setMonth(monthKey(localDate()))}>Jump to this month</button>
+
+    {error && <p className="form-error">{error}</p>}
+    {loading ? <div className="empty-state">Loading the calendar…</div> : <>
+      <div className="calendar-grid" role="grid" aria-label={`Calories for ${monthLabel(month)}`}>
+        {weekdayInitials.map((initial, index) => <div key={index} className="calendar-weekday" aria-hidden="true">{initial}</div>)}
+        {Array.from({ length: leading }, (_, index) => <div key={`blank-${index}`} className="calendar-blank" />)}
+        {days.map(day => <button key={day.date} type="button"
+          className={`calendar-day status-${day.status}${day.date === today ? " is-today" : ""}${day.hasData ? "" : " is-empty"}`}
+          onClick={() => setSelected(day)}
+          aria-label={`${longDate(day.date)}: ${day.items > 0 ? `${Math.round(day.calories)} calories against a ${day.goalCalories} goal, ${statusLabels[day.status]}` : "nothing logged"}, ${day.hasMovement ? `${round(day.exerciseMinutes)} minutes of movement` : "no movement"}`}>
+          <span className="calendar-date">{Number(day.date.slice(8))}</span>
+          <span className="calendar-calories">{day.items > 0 ? Math.round(day.calories) : ""}</span>
+          <span className={`calendar-dot${day.hasMovement ? " moved" : ""}`} aria-hidden="true" />
+        </button>)}
+      </div>
+
+      <div className="calendar-legend">
+        <span className="key under">Under goal</span>
+        <span className="key over">Over goal</span>
+        <span className="key way-over">500+ over</span>
+        <span className="key none">Nothing logged</span>
+        <span className="key dot-moved">Movement tracked</span>
+        <span className="key dot-still">No movement</span>
+      </div>
+    </>}
+
+    {selected && <DayDetail day={selected} profile={profile} onClose={() => setSelected(null)}
+      onOpenDay={date => { setSelected(null); onOpenDay(date); }}
+      onSaved={() => { setSelected(null); refresh(); }} />}
+  </section>;
+}
+
+/** Read-out for one day, including the saved goal and a way to correct it. */
+function DayDetail({ day, profile, onClose, onOpenDay, onSaved }: { day: CalendarDay; profile: Profile; onClose: () => void; onOpenDay: (date: string) => void; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("");
+    const calories = Number(new FormData(event.currentTarget).get("calories"));
+    const response = await fetch("/api/calendar", {
+      method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" },
+      body: JSON.stringify({ date: day.date, calories }),
+    });
+    const result = await response.json();
+    if (!response.ok) { setError(result.error ?? "Unable to save that day's goal"); setBusy(false); return; }
+    onSaved();
+  }
+  const over = day.calories - day.goalCalories;
+  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true">
+    <div className="modal-head"><div><p className="eyebrow">{statusLabels[day.status]}</p><h2>{shortDate(day.date)}</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
+    <p className="day-detail-date">{longDate(day.date)}</p>
+    <dl className="product-meta day-detail-meta">
+      <div><dt>Calories eaten</dt><dd>{day.items > 0 ? amount(day.calories) : "Nothing logged"}</dd></div>
+      <div><dt>Goal that day</dt><dd>{day.goalCalories}{day.goalSource === "current" ? " (current setting)" : ""}</dd></div>
+      <div><dt>{over > 0 ? "Over by" : "Remaining"}</dt><dd className={day.status === "way-over" ? "flagged" : ""}>{day.items > 0 ? amount(Math.abs(over)) : "—"}</dd></div>
+      <div><dt>Movement</dt><dd>{day.hasMovement ? `${round(day.exerciseMinutes)} min${day.exerciseCalories > 0 ? ` · ${Math.round(day.exerciseCalories)} cal` : ""}` : "None tracked"}</dd></div>
+    </dl>
+    {day.activities && <p className="day-detail-activities">{day.activities}</p>}
+    {day.goalSource === "current" && <p className="day-detail-note">No goal was saved for this day, so your current setting is shown. Saving below pins a goal to this day.</p>}
+
+    {editing
+      ? <form className="food-form" onSubmit={submit}>
+          <label>Calorie goal for this day<input name="calories" type="number" min="1" max="20000" step="1" required defaultValue={day.goalCalories} autoFocus /></label>
+          {error && <p className="form-error">{error}</p>}
+          <div className="scanner-actions">
+            <button type="button" className="secondary" onClick={() => setEditing(false)}>Cancel</button>
+            <button type="submit" className="primary" disabled={busy}>{busy ? "Saving…" : "Save goal"}</button>
+          </div>
+        </form>
+      : <div className="scanner-actions">
+          <button type="button" className="secondary" onClick={() => setEditing(true)}>Correct goal</button>
+          <button type="button" className="primary" onClick={() => onOpenDay(day.date)}>Open in diary</button>
+        </div>}
+  </div></div>;
 }
 
 function ReportsPage({ profile }: { profile: Profile }) {
@@ -716,7 +850,7 @@ function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; pr
       return;
     }
     setBusy(true);
-    const response = await fetch("/api/goals", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify(next) });
+    const response = await fetch("/api/goals", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify({ ...next, today: localDate() }) });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) { setError(result.error ?? "Unable to save settings"); setBusy(false); return; }
     onSaved(next);

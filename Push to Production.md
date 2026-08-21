@@ -20,6 +20,8 @@ Not yet applied to production - run these in order, oldest first:
   indexes on food_entries and exercise_entries)
 - 0004_custom_food_barcodes.sql (barcode column on custom_foods, plus a
   unique index per owner and barcode)
+- 0005_daily_calorie_goals.sql (daily_goals table holding the calorie goal
+  that applied on each day, for the Calendar)
 
 # One-time secret setup - NOT part of a routine code push
 

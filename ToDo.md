@@ -9,7 +9,7 @@
 | AI-assisted food entry                      | Complete | The Add Food form takes a typed or dictated meal description and asks Google Gemini for a nutrition estimate, which is reviewed and edited before it is added. |
 | Manually enter foods                        | Complete | You can enter all nutrition values yourself.                                                                                        |
 | Remember custom foods                       | Complete | Manually entered foods can be saved under “My Foods” and reused. The Add Food form filters them with a searchable type-ahead list. |
-| Daily calorie tracking                      | Complete | Main screen shows consumed calories, goal, remaining calories, and over-goal status.                                                |
+| Daily calorie tracking                      | Complete | Main screen shows consumed calories, goal, remaining calories, and over-goal status. The Calendar scores each day against the goal saved for that day. |
 | Net-carbohydrate tracking                   | Complete | Calculated as total carbohydrates minus fiber.                                                                                      |
 | Protein and fat tracking                    | Complete | Both appear in daily progress totals.                                                                                               |
 | Fiber tracking                              | Complete | Fiber is stored with food entries and shown on the main screen with a customizable daily goal.                                      |
@@ -22,6 +22,13 @@
 | Restrict the live site to Chris and Sarah   | Complete | Cloudflare Access requires an email login code and allows only the two authorized email addresses.                                  |
 
 - Add in ability to track weight loss
+
+- Calendar: a month grid colours each day against the calorie goal that was
+  saved for that day - green under, yellow over, red more than 500 over, grey
+  when nothing was logged - with a dot for whether movement was tracked. The
+  calorie goal is frozen onto a day the first time anything is recorded for
+  it, so lowering the goal later never changes how past days are scored. Any
+  day's goal can be corrected by hand.
 
 - Meal assistant: the Add Food form takes a typed or dictated meal
   description and returns a Gemini nutrition estimate for the whole meal as

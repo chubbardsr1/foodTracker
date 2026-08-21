@@ -19,6 +19,8 @@ fat, total carbohydrates, fiber, and net carbohydrates.
 - Per-profile water shortcut buttons plus a custom-ounce option
 - Water and exercise tracking
 - Weekly Reports page for calories consumed and recorded movement
+- Calendar page colouring each day against the calorie goal that applied on
+  that day
 - Automatic net-carb calculation
 - Date-by-date history
 - Per-user data ownership when authenticated user headers are available
@@ -33,6 +35,9 @@ header:
 - **Diary** - the day's meals, macros, water, and exercise.
 - **My Foods** - editing reusable saved foods. Editing a saved food never
   changes diary entries that were already recorded.
+- **Calendar** - a month at a glance. Each day is coloured by how its
+  calories compared with that day's goal, with a dot showing whether any
+  movement was recorded.
 - **Reports** - calories consumed and movement recorded over a date range.
   The range defaults to the last seven calendar days including today, and a
   custom start and end date can be chosen. Dates with no entries are listed
@@ -40,6 +45,41 @@ header:
 
 Goals and the three water shortcut amounts are edited from the gear icon and
 are stored separately for each profile.
+
+## Calendar and per-day calorie goals
+
+The Calendar page shows one month at a time. Each day's background says how
+that day's calories compared with the goal that applied **on that day**:
+
+- green - at or under the goal
+- yellow - over the goal
+- red - over the goal by more than 500 calories
+- neutral grey - nothing logged that day
+
+A dot in each day shows movement: green when exercise was recorded, grey when
+none was. Tapping a day shows the calories, the goal that applied, how far
+over or under it was, and the movement recorded, with buttons to correct that
+day's goal or open the day in the Diary.
+
+### Why the goal is stored per day
+
+The calorie goal is expected to drop as weight comes off, and lowering it
+should not make earlier days look worse than they were. So the goal is
+snapshotted:
+
+- The first time anything is recorded for a day - food, exercise, or water -
+  the calorie goal in force at that moment is frozen onto that day.
+- Later entries on the same day do **not** re-stamp it.
+- Changing the goal in Settings updates **today only**, so the Diary ring and
+  the Calendar agree about the day in progress. Earlier days never move.
+- Any day's stored goal can be corrected by hand from the Calendar, for when
+  a value was recorded wrongly.
+
+Days recorded before this feature existed have no stored goal. They fall back
+to the current setting and are labelled "current setting" until a goal is
+pinned to them.
+
+Stamps are per profile, so Chris and Sarah keep separate goal histories.
 
 ## Meal assistant
 
@@ -155,6 +195,8 @@ uses the binding behavior configured in `vite.config.ts`.
 ## Database
 
 The schema is in `db/schema.ts`. Generated SQL migrations are in `drizzle/`.
+The `daily_goals` table holds one calorie goal per owner per day, which is
+what the Calendar grades against.
 Food entries are assigned to the authenticated user's email, so two authenticated
 people receive separate diaries.
 

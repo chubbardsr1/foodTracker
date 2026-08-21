@@ -2,6 +2,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { customFoods, foodEntries, nutritionGoals } from "../../../db/schema";
 import { normalizeBarcode } from "../barcode/route";
+import { stampDailyGoal } from "../daily-goal";
 import { profileFrom } from "../profile";
 
 const validMeals = new Set(["Breakfast", "Lunch", "Dinner", "Snacks"]);
@@ -33,6 +34,7 @@ export async function POST(request: Request) {
     const db = getDb();
     const owner = profileFrom(request);
     const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving: entryServing, ...nutrition }).returning();
+    await stampDailyGoal(db, owner, eatenOn);
     if (payload.saveCustom === true) {
       const barcode = payload.barcode ? normalizeBarcode(String(payload.barcode)) : null;
       const existing = barcode

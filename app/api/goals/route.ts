@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { nutritionGoals } from "../../../db/schema";
+import { refreshTodayGoal } from "../daily-goal";
 import { profileFrom } from "../profile";
 
 // Water shortcut buttons accept fractional ounces, but never more precision
@@ -22,6 +23,10 @@ export async function PUT(request: Request) {
     const existing = await db.select({ id: nutritionGoals.id }).from(nutritionGoals).where(eq(nutritionGoals.owner, owner)).limit(1);
     if (existing[0]) await db.update(nutritionGoals).set({ ...saved, updatedAt: new Date().toISOString() }).where(eq(nutritionGoals.owner, owner));
     else await db.insert(nutritionGoals).values({ owner, ...saved });
+    // Today is still in progress, so it follows the current setting. Earlier
+    // days keep whatever was stamped on them.
+    const today = String(payload.today ?? "");
+    if (today) await refreshTodayGoal(db, owner, today, saved.calories);
     return Response.json({ goals: saved });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to save goals" }, { status: 500 }); }
 }
