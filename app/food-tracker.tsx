@@ -43,6 +43,14 @@ const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "reports", label: "Reports", title: "Reports", eyebrow: "Calories & movement" },
 ];
 const weekdayInitials = ["S", "M", "T", "W", "T", "F", "S"];
+/** Sensible starting meal when the Add food button does not know which one. */
+function defaultMealForNow(): Meal {
+  const hour = new Date().getHours();
+  if (hour < 10) return "Breakfast";
+  if (hour < 16) return "Lunch";
+  if (hour < 21) return "Dinner";
+  return "Snacks";
+}
 const statusLabels: Record<CalendarDay["status"], string> = {
   none: "Nothing logged", under: "Under goal", over: "Over goal", "way-over": "More than 500 over",
 };
@@ -73,7 +81,8 @@ export default function FoodTracker() {
   const [exercise, setExercise] = useState<ExerciseEntry[]>([]);
   const [goals, setGoals] = useState<Goals>(defaultGoals);
   const [loading, setLoading] = useState(true);
-  const [modalMeal, setModalMeal] = useState<Meal | null>(null);
+  // `locked` is true when the meal is already known, e.g. the + on a meal card.
+  const [addTarget, setAddTarget] = useState<{ meal: Meal; locked: boolean } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customWaterOpen, setCustomWaterOpen] = useState(false);
   const [exerciseOpen, setExerciseOpen] = useState(false);
@@ -212,15 +221,15 @@ export default function FoodTracker() {
           const items = entries.filter(entry => entry.meal === meal);
           const calories = items.reduce((sum, item) => sum + item.calories, 0);
           return <article className="meal-card" key={meal}>
-            <div className="meal-title"><div className={`meal-icon ${meal.toLowerCase()}`}>{meal === "Breakfast" ? "☀" : meal === "Lunch" ? "◐" : meal === "Dinner" ? "☾" : "✦"}</div><div><h3>{meal}</h3><span>{Math.round(calories)} calories</span></div><button onClick={() => setModalMeal(meal)} aria-label={`Add food to ${meal}`}>+</button></div>
-            {items.length === 0 ? <button className="empty-meal" onClick={() => setModalMeal(meal)}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{round(item.calories)}</b><button onClick={() => setEditingEntry(item)} aria-label={`Edit ${item.name}`}>✎</button><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
+            <div className="meal-title"><div className={`meal-icon ${meal.toLowerCase()}`}>{meal === "Breakfast" ? "☀" : meal === "Lunch" ? "◐" : meal === "Dinner" ? "☾" : "✦"}</div><div><h3>{meal}</h3><span>{Math.round(calories)} calories</span></div><button onClick={() => setAddTarget({ meal, locked: true })} aria-label={`Add food to ${meal}`}>+</button></div>
+            {items.length === 0 ? <button className="empty-meal" onClick={() => setAddTarget({ meal, locked: true })}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{round(item.calories)}</b><button onClick={() => setEditingEntry(item)} aria-label={`Edit ${item.name}`}>✎</button><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
           </article>;
         })}
       </section>
-      <button className="floating-add" onClick={() => setModalMeal("Breakfast")}><span>＋</span> Add food</button>
+      <button className="floating-add" onClick={() => setAddTarget({ meal: defaultMealForNow(), locked: false })}><span>＋</span> Add food</button>
     </>}
 
-    {modalMeal && <AddFood meal={modalMeal} date={date} profile={profile} onClose={() => setModalMeal(null)} onSaved={(entry) => { setEntries(current => [...current, entry]); setModalMeal(null); }} />}
+    {addTarget && <AddFood meal={addTarget.meal} mealLocked={addTarget.locked} date={date} profile={profile} onClose={() => setAddTarget(null)} onSaved={(entry) => { setEntries(current => [...current, entry]); setAddTarget(null); }} />}
     {settingsOpen && <SettingsEditor goals={goals} profile={profile} onClose={() => setSettingsOpen(false)} onSaved={(next) => { setGoals(next); setSettingsOpen(false); }} />}
     {customWaterOpen && <CustomWater onClose={() => setCustomWaterOpen(false)} onAdd={(ounces) => { void addWater(ounces); setCustomWaterOpen(false); }} />}
     {exerciseOpen && <AddExercise date={date} profile={profile} onClose={() => setExerciseOpen(false)} onSaved={(entry) => { setExercise(current => [...current, entry]); setExerciseOpen(false); }} />}
@@ -650,8 +659,26 @@ function cameraMessage(reason: unknown) {
 
 const MAX_MEAL_DESCRIPTION = 1500;
 
-function AddFood({ meal, date, profile, onClose, onSaved }: { meal: Meal; date: string; profile: Profile; onClose: () => void; onSaved: (entry: Entry) => void }) {
+type Method = "saved" | "describe" | "scan" | "search" | "manual";
+const methods: { id: Method; label: string; hint: string }[] = [
+  { id: "saved", label: "Saved", hint: "Pick something you have logged before." },
+  { id: "describe", label: "Describe", hint: "Type or dictate the meal and let the assistant estimate it." },
+  { id: "scan", label: "Scan", hint: "Scan a packaged product barcode." },
+  { id: "search", label: "Search", hint: "Look the food up in the USDA database." },
+  { id: "manual", label: "Manual", hint: "Type the nutrition in yourself." },
+];
+const sourceSummaries: Record<Source, string> = {
+  manual: "Entered by hand",
+  saved: "From your saved foods",
+  usda: "From USDA search",
+  barcode: "From the product barcode",
+  ai: "AI estimate — check it before saving",
+};
+
+function AddFood({ meal, mealLocked, date, profile, onClose, onSaved }: { meal: Meal; mealLocked: boolean; date: string; profile: Profile; onClose: () => void; onSaved: (entry: Entry) => void }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const [mealChoice, setMealChoice] = useState<Meal>(meal);
+  const [method, setMethod] = useState<Method>("saved");
   const [query, setQuery] = useState(""); const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<Food[]>([]); const [myFoods, setMyFoods] = useState<Food[]>([]);
   const [selected, setSelected] = useState<Draft | null>(null);
@@ -749,6 +776,7 @@ function AddFood({ meal, date, profile, onClose, onSaved }: { meal: Meal; date: 
     setSelected(existing); setSavedId(existing.id); setSource("saved"); setSelectionKey(current => current + 1);
     setBarcode(existing.barcode ? barcodeDigits(existing.barcode) : "");
     resetSources();
+    setMethod("saved");
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -759,72 +787,97 @@ function AddFood({ meal, date, profile, onClose, onSaved }: { meal: Meal; date: 
   }
 
   const missingLabels = (scanned?.missing ?? []).map(field => nutritionLabels[field] ?? field);
+  const activeMethod = methods.find(item => item.id === method) ?? methods[0];
 
   return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="add-title">
-    <div className="modal-head"><div><p className="eyebrow">{meal}</p><h2 id="add-title">Add food</h2></div><button onClick={onClose}>×</button></div>
+    <div className="modal-head"><div><p className="eyebrow">{mealLocked ? mealChoice : "New entry"}</p><h2 id="add-title">Add food</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
 
-    <SavedFoodPicker foods={myFoods} selectedId={savedId} onSelect={food => pick(food, "saved")} onClear={() => pick(null, "manual")} />
+    <section className="add-step">
+      <p className="step-label"><span aria-hidden="true">1</span> Find your food</p>
+      <div className="method-tabs" role="tablist" aria-label="How to add this food">
+        {methods.map(item => <button key={item.id} type="button" role="tab" aria-selected={item.id === method}
+          className={item.id === method ? "active" : ""} onClick={() => setMethod(item.id)}>{item.label}</button>)}
+      </div>
+      <p className="method-hint">{activeMethod.hint}</p>
 
-    <label className="field-heading spaced" htmlFor="meal-description">Describe your meal</label>
-    <textarea id="meal-description" className="meal-textarea" rows={5} maxLength={MAX_MEAL_DESCRIPTION}
-      value={description} onChange={event => { setDescription(event.target.value); setAiNotice(""); }}
-      placeholder={"2 leaves of romaine lettuce\n1.5 hamburger patties, 4 oz each, 6 oz total\n1 tablespoon mayonnaise\n1 serving green beans"} />
-    <div className="meal-assistant-row">
-      <small className="meal-hint">Tap the microphone on your iPhone keyboard to dictate this instead of typing.</small>
-      <button type="button" className="estimate-button" onClick={() => void estimateMeal()} disabled={estimating || description.trim().length === 0}>
-        {estimating ? "Estimating…" : "Estimate Nutrition"}
-      </button>
-    </div>
-    {estimating && <p className="meal-progress" role="status">Asking the meal assistant… this usually takes a few seconds.</p>}
-    {aiNotice && <div className="barcode-notice"><span aria-hidden="true">⚠</span><div><strong>{aiNotice}</strong><p>Your description is still here. Edit it and try again, or fill in the nutrition below yourself.</p></div></div>}
-    {estimate && <div className="ai-card">
-      <div className="ai-head"><span aria-hidden="true">✧</span><div><strong>AI estimate — review before saving</strong><p>These numbers are an estimate, not exact or medically verified values. Check them and edit anything that looks wrong.</p></div></div>
-      <dl className="product-meta">
-        <div><dt>Covers</dt><dd>{estimate.serving}</dd></div>
-        <div><dt>Confidence</dt><dd className={estimate.confidence === "low" ? "flagged" : ""}>{estimate.confidence}</dd></div>
-      </dl>
-      {estimate.assumptions.length > 0 && <div className="ai-list"><p className="ai-list-title">Assumptions</p><ul>{estimate.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
-      {estimate.warnings.length > 0 && <div className="ai-list warnings"><p className="ai-list-title">Warnings</p><ul>{estimate.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
-      <p className="ai-tip">A packaged food label or a barcode scan is more accurate than an estimate whenever one is available.</p>
-    </div>}
+      <div className="method-panel">
+        {method === "saved" && <SavedFoodPicker foods={myFoods} selectedId={savedId} onSelect={food => pick(food, "saved")} onClear={() => pick(null, "manual")} />}
 
-    <p className="field-heading spaced">Packaged food</p>
-    <div className="barcode-row">
-      <button type="button" className="scan-button" onClick={() => setScannerOpen(true)} disabled={lookingUp}>
-        <span aria-hidden="true">▮</span>{lookingUp ? "Looking up…" : "Scan barcode"}
-      </button>
-      {barcode && <span className="barcode-chip">Barcode {barcode}</span>}
-    </div>
-    {barcodeNotice && <div className="barcode-notice"><span aria-hidden="true">⚠</span><div><strong>{barcodeNotice}</strong><p>The barcode is kept{barcode ? ` (${barcode})` : ""}. Fill in the nutrition below and it will be saved with the food.</p></div></div>}
-    {duplicate && <div className="barcode-notice duplicate"><span aria-hidden="true">⚠</span><div><strong>You already saved a food for this barcode</strong><p>“{duplicate.name}” is in My Foods. Saving again updates that food instead of creating a second copy.</p><button type="button" onClick={useSavedDuplicate}>Use my saved version</button></div></div>}
-    {scanned && <div className="product-card">
-      <div className="product-head"><strong>{scanned.name}</strong>{scanned.brand && <span>{scanned.brand}</span>}</div>
-      <dl className="product-meta">
-        <div><dt>Source</dt><dd>{scanned.source}</dd></div>
-        <div><dt>Serving basis</dt><dd className={scanned.servingBasis === "100g" ? "flagged" : ""}>{scanned.servingDescription}</dd></div>
-        {scanned.servingAmount !== null && <div><dt>Serving amount</dt><dd>{amount(scanned.servingAmount)} {scanned.servingUnit}</dd></div>}
-        {scanned.packageSize && <div><dt>Package</dt><dd>{scanned.packageSize}</dd></div>}
-      </dl>
-      {missingLabels.length > 0
-        ? <p className="product-missing">⚠ Open Food Facts has no {missingLabels.join(", ")} for this product. Those fields are blank below — enter them yourself. Nothing is guessed.</p>
-        : <p className="product-complete">✓ All nutrition fields came from the product record. Review them before saving.</p>}
-      <p className="product-credit">{scanned.attribution}</p>
-    </div>}
+        {method === "describe" && <>
+          <label className="sr-label" htmlFor="meal-description">Describe your meal</label>
+          <textarea id="meal-description" className="meal-textarea" rows={5} maxLength={MAX_MEAL_DESCRIPTION}
+            value={description} onChange={event => { setDescription(event.target.value); setAiNotice(""); }}
+            placeholder={"2 leaves of romaine lettuce\n1.5 hamburger patties, 4 oz each, 6 oz total\n1 tablespoon mayonnaise\n1 serving green beans"} />
+          <div className="meal-assistant-row">
+            <small className="meal-hint">Tap the microphone on your iPhone keyboard to dictate this instead of typing.</small>
+            <button type="button" className="estimate-button" onClick={() => void estimateMeal()} disabled={estimating || description.trim().length === 0}>
+              {estimating ? "Estimating…" : "Estimate Nutrition"}
+            </button>
+          </div>
+          {estimating && <p className="meal-progress" role="status">Asking the meal assistant… this usually takes a few seconds.</p>}
+          {aiNotice && <div className="barcode-notice"><span aria-hidden="true">⚠</span><div><strong>{aiNotice}</strong><p>Your description is still here. Edit it and try again, or fill in the nutrition below yourself.</p></div></div>}
+          {estimate && <div className="ai-card">
+            <div className="ai-head"><span aria-hidden="true">✧</span><div><strong>AI estimate — review before saving</strong><p>These numbers are an estimate, not exact or medically verified values. Check them and edit anything that looks wrong.</p></div></div>
+            <dl className="product-meta">
+              <div><dt>Covers</dt><dd>{estimate.serving}</dd></div>
+              <div><dt>Confidence</dt><dd className={estimate.confidence === "low" ? "flagged" : ""}>{estimate.confidence}</dd></div>
+            </dl>
+            {estimate.assumptions.length > 0 && <div className="ai-list"><p className="ai-list-title">Assumptions</p><ul>{estimate.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
+            {estimate.warnings.length > 0 && <div className="ai-list warnings"><p className="ai-list-title">Warnings</p><ul>{estimate.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
+            <p className="ai-tip">A packaged food label or a barcode scan is more accurate than an estimate whenever one is available.</p>
+          </div>}
+        </>}
 
-    <p className="field-heading spaced">USDA food search</p>
-    <div className="food-search"><input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void searchFoods(); } }} placeholder="Search USDA foods…" /><button type="button" onClick={() => void searchFoods()} disabled={searching}>{searching ? "…" : "Search"}</button></div>
-    {results.length > 0 && <div className="search-results">{results.map(food => <button key={food.id} type="button" onClick={() => { pick(food, "usda"); setResults([]); }}><strong>{food.name}</strong><span>{food.serving} · {Math.round(food.calories)} cal · {round(food.carbs - food.fiber)}g net</span></button>)}</div>}
+        {method === "scan" && <>
+          <div className="barcode-row">
+            <button type="button" className="scan-button" onClick={() => setScannerOpen(true)} disabled={lookingUp}>
+              <span aria-hidden="true">▮</span>{lookingUp ? "Looking up…" : "Scan barcode"}
+            </button>
+            {barcode && <span className="barcode-chip">Barcode {barcode}</span>}
+          </div>
+          {barcodeNotice && <div className="barcode-notice"><span aria-hidden="true">⚠</span><div><strong>{barcodeNotice}</strong><p>The barcode is kept{barcode ? ` (${barcode})` : ""}. Fill in the nutrition below and it will be saved with the food.</p></div></div>}
+          {duplicate && <div className="barcode-notice duplicate"><span aria-hidden="true">⚠</span><div><strong>You already saved a food for this barcode</strong><p>“{duplicate.name}” is in My Foods. Saving again updates that food instead of creating a second copy.</p><button type="button" onClick={useSavedDuplicate}>Use my saved version</button></div></div>}
+          {scanned && <div className="product-card">
+            <div className="product-head"><strong>{scanned.name}</strong>{scanned.brand && <span>{scanned.brand}</span>}</div>
+            <dl className="product-meta">
+              <div><dt>Source</dt><dd>{scanned.source}</dd></div>
+              <div><dt>Serving basis</dt><dd className={scanned.servingBasis === "100g" ? "flagged" : ""}>{scanned.servingDescription}</dd></div>
+              {scanned.servingAmount !== null && <div><dt>Serving amount</dt><dd>{amount(scanned.servingAmount)} {scanned.servingUnit}</dd></div>}
+              {scanned.packageSize && <div><dt>Package</dt><dd>{scanned.packageSize}</dd></div>}
+            </dl>
+            {missingLabels.length > 0
+              ? <p className="product-missing">⚠ Open Food Facts has no {missingLabels.join(", ")} for this product. Those fields are blank below — enter them yourself. Nothing is guessed.</p>
+              : <p className="product-complete">✓ All nutrition fields came from the product record. Review them before saving.</p>}
+            <p className="product-credit">{scanned.attribution}</p>
+          </div>}
+        </>}
 
-    <div className="coming-soon"><span>✦</span><div><strong>{selected ? `Loaded: ${selected.name}` : "Describe, scan, search, or enter it yourself"}</strong><p>{selected ? "Review the serving and nutrition before saving. Editing here does not change the saved food." : "Foods entered manually can be saved to My Foods for next time."}</p></div></div>
+        {method === "search" && <>
+          <div className="food-search"><input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void searchFoods(); } }} placeholder="Search USDA foods…" aria-label="Search USDA foods" /><button type="button" onClick={() => void searchFoods()} disabled={searching}>{searching ? "…" : "Search"}</button></div>
+          {results.length > 0 && <div className="search-results">{results.map(food => <button key={food.id} type="button" onClick={() => { pick(food, "usda"); setResults([]); }}><strong>{food.name}</strong><span>{food.serving} · {Math.round(food.calories)} cal · {round(food.carbs - food.fiber)}g net</span></button>)}</div>}
+        </>}
+      </div>
+    </section>
 
-    <form key={selectionKey} onSubmit={submit} className="food-form"><input type="hidden" name="meal" value={meal} />
-      <label>Food name<input name="name" placeholder="e.g. Scrambled eggs" required defaultValue={selected?.name ?? ""} /></label>
-      <label>Serving<input name="serving" placeholder="e.g. 4 oz or 1/2 cup" required defaultValue={selected?.serving ?? ""} /></label>
-      <label>Servings eaten<input name="servings" type="number" min="0.01" max="100" step="0.01" required defaultValue="1.00" /><small>Use 0.50 for half a serving. Nutrition is adjusted automatically.</small></label>
-      <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={selected?.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" required defaultValue={selected?.fiber} /></label></div>
-      {savedId === null && <label className="checkbox-row"><input name="saveCustom" type="checkbox" defaultChecked={source !== "ai"} /><span>{source === "ai" ? "Save to My Foods" : "Save this to My Foods"}</span></label>}
-      {error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Add to diary"}</button>
-    </form>
+    <section className="add-step">
+      <p className="step-label"><span aria-hidden="true">2</span> Review and add</p>
+      <p className={`source-summary${selected ? " loaded" : ""}`}>
+        {selected ? <><strong>{selected.name}</strong><span>{sourceSummaries[source]}</span></> : <span>Nothing loaded yet. Type the values in below, or pick a method above.</span>}
+      </p>
+
+      <form key={selectionKey} onSubmit={submit} className="food-form">
+        {mealLocked
+          ? <input type="hidden" name="meal" value={mealChoice} />
+          : <label>Meal<select name="meal" value={mealChoice} onChange={event => setMealChoice(event.target.value as Meal)}>{meals.map(item => <option key={item}>{item}</option>)}</select></label>}
+        <label>Food name<input name="name" placeholder="e.g. Scrambled eggs" required defaultValue={selected?.name ?? ""} /></label>
+        <label>Serving<input name="serving" placeholder="e.g. 4 oz or 1/2 cup" required defaultValue={selected?.serving ?? ""} /></label>
+        <label>Servings eaten<input name="servings" type="number" min="0.01" max="100" step="0.01" required defaultValue="1.00" /><small>Use 0.50 for half a serving. Nutrition is adjusted automatically.</small></label>
+        <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={selected?.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" required defaultValue={selected?.fiber} /></label></div>
+        {savedId === null && <label className="checkbox-row"><input name="saveCustom" type="checkbox" defaultChecked={source !== "ai"} /><span>{source === "ai" ? "Save to My Foods" : "Save this to My Foods"}</span></label>}
+        {error && <p className="form-error">{error}</p>}
+        <button className="primary" disabled={busy}>{busy ? "Saving…" : `Add to ${mealChoice}`}</button>
+      </form>
+    </section>
 
     {scannerOpen && <BarcodeScanner onDetected={code => void lookupBarcode(code)} onClose={() => setScannerOpen(false)} />}
   </div></div>;
