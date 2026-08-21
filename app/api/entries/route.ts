@@ -42,6 +42,21 @@ export async function POST(request: Request) {
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to save food" }, { status: 500 }); }
 }
 
+export async function PUT(request: Request) {
+  try {
+    const payload = await request.json() as Record<string, unknown>;
+    const id = numberValue(payload.id);
+    const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? "");
+    const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
+    if (!Number.isInteger(id) || !name || !serving || !validMeals.has(meal) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every field with a valid value" }, { status: 400 });
+    const [entry] = await getDb().update(foodEntries).set({ meal, name, serving, ...nutrition })
+      .where(and(eq(foodEntries.id, id), eq(foodEntries.owner, profileFrom(request))))
+      .returning();
+    if (!entry) return Response.json({ error: "Diary entry was not found" }, { status: 404 });
+    return Response.json({ entry });
+  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to update food" }, { status: 500 }); }
+}
+
 export async function DELETE(request: Request) {
   try {
     const id = Number(new URL(request.url).searchParams.get("id"));

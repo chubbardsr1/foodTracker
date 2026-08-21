@@ -28,6 +28,8 @@ export default function FoodTracker() {
   const [goalOpen, setGoalOpen] = useState(false);
   const [customWaterOpen, setCustomWaterOpen] = useState(false);
   const [exerciseOpen, setExerciseOpen] = useState(false);
+  const [showMyFoods, setShowMyFoods] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -106,10 +108,20 @@ export default function FoodTracker() {
 
   if (!profile) return <ProfileChooser onSelect={selectProfile} />;
 
+  if (showMyFoods) return <main className="app-shell">
+    <header className="topbar">
+      <div className="brand-mark">N</div>
+      <div><p className="eyebrow">{profileNames[profile]}</p><h1>My Foods</h1></div>
+      <button className="nav-button" onClick={() => setShowMyFoods(false)}>← Diary</button>
+    </header>
+    <MyFoodsPage profile={profile} />
+  </main>;
+
   return <main className="app-shell">
     <header className="topbar">
       <div className="brand-mark">N</div>
       <div><p className="eyebrow">Daily Food Tracker</p><h1>Nourish</h1></div>
+      <button className="nav-button" onClick={() => setShowMyFoods(true)}>My Foods</button>
       <button className="profile-button" onClick={() => { window.localStorage.removeItem("foodTrackerProfile"); setProfile(null); }} aria-label="Switch profile">
         <span>{profileNames[profile].charAt(0)}</span>{profileNames[profile]}
       </button>
@@ -154,7 +166,7 @@ export default function FoodTracker() {
         const calories = items.reduce((sum, item) => sum + item.calories, 0);
         return <article className="meal-card" key={meal}>
           <div className="meal-title"><div className={`meal-icon ${meal.toLowerCase()}`}>{meal === "Breakfast" ? "☀" : meal === "Lunch" ? "◐" : meal === "Dinner" ? "☾" : "✦"}</div><div><h3>{meal}</h3><span>{Math.round(calories)} calories</span></div><button onClick={() => setModalMeal(meal)} aria-label={`Add food to ${meal}`}>+</button></div>
-          {items.length === 0 ? <button className="empty-meal" onClick={() => setModalMeal(meal)}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{Math.round(item.calories)}</b><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
+          {items.length === 0 ? <button className="empty-meal" onClick={() => setModalMeal(meal)}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{round(item.calories)}</b><button onClick={() => setEditingEntry(item)} aria-label={`Edit ${item.name}`}>✎</button><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
         </article>;
       })}
     </section>
@@ -163,7 +175,60 @@ export default function FoodTracker() {
     {goalOpen && <GoalEditor goals={goals} profile={profile} onClose={() => setGoalOpen(false)} onSaved={(next) => { setGoals(next); setGoalOpen(false); }} />}
     {customWaterOpen && <CustomWater onClose={() => setCustomWaterOpen(false)} onAdd={(ounces) => { void addWater(ounces); setCustomWaterOpen(false); }} />}
     {exerciseOpen && <AddExercise date={date} profile={profile} onClose={() => setExerciseOpen(false)} onSaved={(entry) => { setExercise(current => [...current, entry]); setExerciseOpen(false); }} />}
+    {editingEntry && <EditDiaryEntry entry={editingEntry} profile={profile} onClose={() => setEditingEntry(null)} onSaved={(entry) => { setEntries(current => current.map(item => item.id === entry.id ? entry : item)); setEditingEntry(null); }} />}
   </main>;
+}
+
+function MyFoodsPage({ profile }: { profile: Profile }) {
+  const [foods, setFoods] = useState<Food[]>([]);
+  const [editing, setEditing] = useState<Food | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
+  useEffect(() => {
+    fetch("/api/custom-foods", { headers }).then(async response => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Unable to load saved foods");
+      setFoods(data.foods ?? []);
+    }).catch(reason => setError(reason instanceof Error ? reason.message : "Unable to load saved foods")).finally(() => setLoading(false));
+  }, [headers]);
+  return <section className="saved-food-page">
+    <div className="section-heading"><div><p className="eyebrow">Reusable entries</p><h2>Saved foods</h2></div><span>{foods.length} {foods.length === 1 ? "food" : "foods"}</span></div>
+    <p className="page-help">Changes here apply the next time you use a saved food. Previous diary entries remain unchanged.</p>
+    {error && <p className="form-error">{error}</p>}
+    {loading ? <div className="empty-state">Loading saved foods…</div> : foods.length === 0 ? <div className="empty-state">No saved foods yet.</div> : <div className="saved-food-list">{foods.map(food => <article className="saved-food-card" key={food.id}><div><strong>{food.name}</strong><span>{food.serving}</span><small>{round(food.calories)} cal · {round(food.protein)}g protein · {round(food.carbs - food.fiber)}g net carbs</small></div><button onClick={() => setEditing(food)}>Edit</button></article>)}</div>}
+    {editing && <EditSavedFood food={editing} profile={profile} onClose={() => setEditing(null)} onSaved={(food) => { setFoods(current => current.map(item => item.id === food.id ? food : item)); setEditing(null); }} />}
+  </section>;
+}
+
+function NutritionFields({ item }: { item: Food | Entry }) {
+  return <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={item.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={item.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={item.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={item.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" required defaultValue={item.fiber} /></label></div>;
+}
+
+function EditSavedFood({ food, profile, onClose, onSaved }: { food: Food; profile: Profile; onClose: () => void; onSaved: (food: Food) => void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("");
+    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const response = await fetch("/api/custom-foods", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify({ ...body, id: food.id }) });
+    const result = await response.json();
+    if (!response.ok) { setError(result.error ?? "Unable to update saved food"); setBusy(false); return; }
+    onSaved(result.food);
+  }
+  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">My Foods</p><h2>Edit saved food</h2></div><button onClick={onClose}>×</button></div><div className="coming-soon"><span>✓</span><div><strong>Past entries are protected</strong><p>This changes the reusable saved food only.</p></div></div><form className="food-form" onSubmit={submit}><label>Food name<input name="name" required defaultValue={food.name} /></label><label>Serving<input name="serving" required defaultValue={food.serving} /></label><NutritionFields item={food} />{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button></form></div></div>;
+}
+
+function EditDiaryEntry({ entry, profile, onClose, onSaved }: { entry: Entry; profile: Profile; onClose: () => void; onSaved: (entry: Entry) => void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("");
+    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const response = await fetch("/api/entries", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify({ ...body, id: entry.id }) });
+    const result = await response.json();
+    if (!response.ok) { setError(result.error ?? "Unable to update diary entry"); setBusy(false); return; }
+    onSaved(result.entry);
+  }
+  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Diary entry</p><h2>Edit food</h2></div><button onClick={onClose}>×</button></div><form className="food-form" onSubmit={submit}><label>Meal<select name="meal" defaultValue={entry.meal}>{meals.map(meal => <option key={meal}>{meal}</option>)}</select></label><label>Food name<input name="name" required defaultValue={entry.name} /></label><label>Serving eaten<input name="serving" required defaultValue={entry.serving} /></label><NutritionFields item={entry} />{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Update diary entry"}</button></form></div></div>;
 }
 
 function ProfileChooser({ onSelect }: { onSelect: (profile: Profile) => void }) {

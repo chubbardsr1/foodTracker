@@ -1,0 +1,205 @@
+diff --git a/app/api/custom-foods/route.ts b/app/api/custom-foods/route.ts
+index 050ddad..515a88b 100644
+--- a/app/api/custom-foods/route.ts
++++ b/app/api/custom-foods/route.ts
+@@ -1,8 +1,10 @@
+-import { asc, eq } from "drizzle-orm";
++import { and, asc, eq } from "drizzle-orm";
+ import { getDb } from "../../../db";
+ import { customFoods } from "../../../db/schema";
+ import { profileFrom } from "../profile";
+ 
++const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : NaN;
++
+ export async function GET(request: Request) {
+   try {
+     const foods = await getDb().select().from(customFoods)
+@@ -14,3 +16,21 @@ export async function GET(request: Request) {
+     return Response.json({ error: error instanceof Error ? error.message : "Unable to load custom foods" }, { status: 500 });
+   }
+ }
++
++export async function PUT(request: Request) {
++  try {
++    const payload = await request.json() as Record<string, unknown>;
++    const id = numberValue(payload.id);
++    const name = String(payload.name ?? "").trim();
++    const serving = String(payload.serving ?? "").trim();
++    const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
++    if (!Number.isInteger(id) || !name || !serving || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every field with a valid value" }, { status: 400 });
++    const [food] = await getDb().update(customFoods).set({ name, serving, ...nutrition })
++      .where(and(eq(customFoods.id, id), eq(customFoods.owner, profileFrom(request))))
++      .returning();
++    if (!food) return Response.json({ error: "Saved food was not found" }, { status: 404 });
++    return Response.json({ food });
++  } catch (error) {
++    return Response.json({ error: error instanceof Error ? error.message : "Unable to update saved food" }, { status: 500 });
++  }
++}
+diff --git a/app/api/entries/route.ts b/app/api/entries/route.ts
+index de104eb..3c9ba06 100644
+--- a/app/api/entries/route.ts
++++ b/app/api/entries/route.ts
+@@ -42,6 +42,21 @@ export async function POST(request: Request) {
+   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to save food" }, { status: 500 }); }
+ }
+ 
++export async function PUT(request: Request) {
++  try {
++    const payload = await request.json() as Record<string, unknown>;
++    const id = numberValue(payload.id);
++    const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? "");
++    const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
++    if (!Number.isInteger(id) || !name || !serving || !validMeals.has(meal) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every field with a valid value" }, { status: 400 });
++    const [entry] = await getDb().update(foodEntries).set({ meal, name, serving, ...nutrition })
++      .where(and(eq(foodEntries.id, id), eq(foodEntries.owner, profileFrom(request))))
++      .returning();
++    if (!entry) return Response.json({ error: "Diary entry was not found" }, { status: 404 });
++    return Response.json({ entry });
++  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to update food" }, { status: 500 }); }
++}
++
+ export async function DELETE(request: Request) {
+   try {
+     const id = Number(new URL(request.url).searchParams.get("id"));
+diff --git a/app/food-tracker.tsx b/app/food-tracker.tsx
+index d9bb6df..5b268cc 100644
+--- a/app/food-tracker.tsx
++++ b/app/food-tracker.tsx
+@@ -28,6 +28,8 @@ export default function FoodTracker() {
+   const [goalOpen, setGoalOpen] = useState(false);
+   const [customWaterOpen, setCustomWaterOpen] = useState(false);
+   const [exerciseOpen, setExerciseOpen] = useState(false);
++  const [showMyFoods, setShowMyFoods] = useState(false);
++  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
+   const [message, setMessage] = useState("");
+ 
+   useEffect(() => {
+@@ -106,10 +108,20 @@ export default function FoodTracker() {
+ 
+   if (!profile) return <ProfileChooser onSelect={selectProfile} />;
+ 
++  if (showMyFoods) return <main className="app-shell">
++    <header className="topbar">
++      <div className="brand-mark">N</div>
++      <div><p className="eyebrow">{profileNames[profile]}</p><h1>My Foods</h1></div>
++      <button className="nav-button" onClick={() => setShowMyFoods(false)}>← Diary</button>
++    </header>
++    <MyFoodsPage profile={profile} />
++  </main>;
++
+   return <main className="app-shell">
+     <header className="topbar">
+       <div className="brand-mark">N</div>
+       <div><p className="eyebrow">Daily Food Tracker</p><h1>Nourish</h1></div>
++      <button className="nav-button" onClick={() => setShowMyFoods(true)}>My Foods</button>
+       <button className="profile-button" onClick={() => { window.localStorage.removeItem("foodTrackerProfile"); setProfile(null); }} aria-label="Switch profile">
+         <span>{profileNames[profile].charAt(0)}</span>{profileNames[profile]}
+       </button>
+@@ -154,7 +166,7 @@ export default function FoodTracker() {
+         const calories = items.reduce((sum, item) => sum + item.calories, 0);
+         return <article className="meal-card" key={meal}>
+           <div className="meal-title"><div className={`meal-icon ${meal.toLowerCase()}`}>{meal === "Breakfast" ? "☀" : meal === "Lunch" ? "◐" : meal === "Dinner" ? "☾" : "✦"}</div><div><h3>{meal}</h3><span>{Math.round(calories)} calories</span></div><button onClick={() => setModalMeal(meal)} aria-label={`Add food to ${meal}`}>+</button></div>
+-          {items.length === 0 ? <button className="empty-meal" onClick={() => setModalMeal(meal)}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{Math.round(item.calories)}</b><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
++          {items.length === 0 ? <button className="empty-meal" onClick={() => setModalMeal(meal)}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{round(item.calories)}</b><button onClick={() => setEditingEntry(item)} aria-label={`Edit ${item.name}`}>✎</button><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
+         </article>;
+       })}
+     </section>
+@@ -163,9 +175,62 @@ export default function FoodTracker() {
+     {goalOpen && <GoalEditor goals={goals} profile={profile} onClose={() => setGoalOpen(false)} onSaved={(next) => { setGoals(next); setGoalOpen(false); }} />}
+     {customWaterOpen && <CustomWater onClose={() => setCustomWaterOpen(false)} onAdd={(ounces) => { void addWater(ounces); setCustomWaterOpen(false); }} />}
+     {exerciseOpen && <AddExercise date={date} profile={profile} onClose={() => setExerciseOpen(false)} onSaved={(entry) => { setExercise(current => [...current, entry]); setExerciseOpen(false); }} />}
++    {editingEntry && <EditDiaryEntry entry={editingEntry} profile={profile} onClose={() => setEditingEntry(null)} onSaved={(entry) => { setEntries(current => current.map(item => item.id === entry.id ? entry : item)); setEditingEntry(null); }} />}
+   </main>;
+ }
+ 
++function MyFoodsPage({ profile }: { profile: Profile }) {
++  const [foods, setFoods] = useState<Food[]>([]);
++  const [editing, setEditing] = useState<Food | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
++  useEffect(() => {
++    fetch("/api/custom-foods", { headers }).then(async response => {
++      const data = await response.json();
++      if (!response.ok) throw new Error(data.error ?? "Unable to load saved foods");
++      setFoods(data.foods ?? []);
++    }).catch(reason => setError(reason instanceof Error ? reason.message : "Unable to load saved foods")).finally(() => setLoading(false));
++  }, [headers]);
++  return <section className="saved-food-page">
++    <div className="section-heading"><div><p className="eyebrow">Reusable entries</p><h2>Saved foods</h2></div><span>{foods.length} {foods.length === 1 ? "food" : "foods"}</span></div>
++    <p className="page-help">Changes here apply the next time you use a saved food. Previous diary entries remain unchanged.</p>
++    {error && <p className="form-error">{error}</p>}
++    {loading ? <div className="empty-state">Loading saved foods…</div> : foods.length === 0 ? <div className="empty-state">No saved foods yet.</div> : <div className="saved-food-list">{foods.map(food => <article className="saved-food-card" key={food.id}><div><strong>{food.name}</strong><span>{food.serving}</span><small>{round(food.calories)} cal · {round(food.protein)}g protein · {round(food.carbs - food.fiber)}g net carbs</small></div><button onClick={() => setEditing(food)}>Edit</button></article>)}</div>}
++    {editing && <EditSavedFood food={editing} profile={profile} onClose={() => setEditing(null)} onSaved={(food) => { setFoods(current => current.map(item => item.id === food.id ? food : item)); setEditing(null); }} />}
++  </section>;
++}
++
++function NutritionFields({ item }: { item: Food | Entry }) {
++  return <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={item.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={item.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={item.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={item.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" required defaultValue={item.fiber} /></label></div>;
++}
++
++function EditSavedFood({ food, profile, onClose, onSaved }: { food: Food; profile: Profile; onClose: () => void; onSaved: (food: Food) => void }) {
++  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
++  async function submit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault(); setBusy(true); setError("");
++    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
++    const response = await fetch("/api/custom-foods", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify({ ...body, id: food.id }) });
++    const result = await response.json();
++    if (!response.ok) { setError(result.error ?? "Unable to update saved food"); setBusy(false); return; }
++    onSaved(result.food);
++  }
++  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">My Foods</p><h2>Edit saved food</h2></div><button onClick={onClose}>×</button></div><div className="coming-soon"><span>✓</span><div><strong>Past entries are protected</strong><p>This changes the reusable saved food only.</p></div></div><form className="food-form" onSubmit={submit}><label>Food name<input name="name" required defaultValue={food.name} /></label><label>Serving<input name="serving" required defaultValue={food.serving} /></label><NutritionFields item={food} />{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button></form></div></div>;
++}
++
++function EditDiaryEntry({ entry, profile, onClose, onSaved }: { entry: Entry; profile: Profile; onClose: () => void; onSaved: (entry: Entry) => void }) {
++  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
++  async function submit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault(); setBusy(true); setError("");
++    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
++    const response = await fetch("/api/entries", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify({ ...body, id: entry.id }) });
++    const result = await response.json();
++    if (!response.ok) { setError(result.error ?? "Unable to update diary entry"); setBusy(false); return; }
++    onSaved(result.entry);
++  }
++  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Diary entry</p><h2>Edit food</h2></div><button onClick={onClose}>×</button></div><form className="food-form" onSubmit={submit}><label>Meal<select name="meal" defaultValue={entry.meal}>{meals.map(meal => <option key={meal}>{meal}</option>)}</select></label><label>Food name<input name="name" required defaultValue={entry.name} /></label><label>Serving eaten<input name="serving" required defaultValue={entry.serving} /></label><NutritionFields item={entry} />{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Update diary entry"}</button></form></div></div>;
++}
++
+ function ProfileChooser({ onSelect }: { onSelect: (profile: Profile) => void }) {
+   return <main className="profile-screen"><div className="profile-panel"><div className="brand-mark large">N</div><p className="eyebrow">Daily Food Tracker</p><h1>Who is tracking?</h1><p>Your food, goals, water, exercise, and custom foods stay in your own profile.</p><div className="profile-options"><button onClick={() => onSelect("chris")}><span>C</span><strong>Chris</strong></button><button onClick={() => onSelect("sarah")}><span>S</span><strong>Sarah</strong></button></div></div></main>;
+ }
+diff --git a/app/globals.css b/app/globals.css
+index 9cd0146..3d69fc5 100644
+--- a/app/globals.css
++++ b/app/globals.css
+@@ -17,6 +17,8 @@ h2 { font:600 27px/1.1 Georgia,serif; }
+ .profile-button { margin-left:auto; display:flex; align-items:center; gap:6px; padding:5px 9px 5px 5px; border:1px solid #dce3dd; border-radius:30px; background:#fffdf9; font-size:11px; font-weight:700; cursor:pointer; }
+ .profile-button span { width:28px; height:28px; display:grid; place-items:center; border-radius:50%; background:var(--sage-dark); color:white; }
+ .profile-button+.icon-button { margin-left:0; }
++.nav-button { margin-left:auto; padding:9px 12px; border:1px solid #dce3dd; border-radius:12px; background:#fffdf9; color:var(--sage-dark); font-size:11px; font-weight:800; cursor:pointer; }
++.nav-button+.profile-button { margin-left:0; }
+ .date-nav { display:grid; grid-template-columns:45px 1fr 45px; align-items:center; margin-bottom:18px; }
+ .date-nav>button { border:0; background:transparent; cursor:pointer; font-size:31px; }
+ .date-button { display:flex; flex-direction:column; align-items:center; gap:2px; }
+@@ -48,7 +50,7 @@ h2 { font:600 27px/1.1 Georgia,serif; }
+ .meal-title span { color:var(--muted); font-size:11px; }
+ .meal-title button { margin-left:auto; width:36px; height:36px; border:0; border-radius:50%; background:#e5ede8; color:var(--sage-dark); font-size:24px; cursor:pointer; }
+ .empty-meal { width:100%; padding:0 15px 15px 66px; border:0; background:none; text-align:left; color:#809087; font-size:12px; cursor:pointer; }
+-.food-row { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:12px; padding:12px 15px; border-top:1px solid #eeeae0; }
++.food-row { display:grid; grid-template-columns:1fr auto auto auto; align-items:center; gap:10px; padding:12px 15px; border-top:1px solid #eeeae0; }
+ .food-row div { display:flex; flex-direction:column; gap:3px; min-width:0; }.food-row strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.food-row span{color:var(--muted);font-size:11px}.food-row b{font-size:13px}.food-row button{border:0;background:transparent;color:#a0a7a2;font-size:19px;cursor:pointer}
+ .empty-state,.notice { width:100%; padding:22px; border:1px solid #e4e0d6; border-radius:18px; background:white; text-align:center; color:var(--muted); }
+ .notice { margin-bottom:15px; cursor:pointer; color:#9b584b; background:#fff1ed; }
+@@ -73,9 +75,10 @@ h2 { font:600 27px/1.1 Georgia,serif; }
+ .food-search { display:grid; grid-template-columns:1fr auto; gap:8px; margin-bottom:10px; }.food-search input{min-width:0;padding:12px 13px;border:1px solid #d9d6cd;border-radius:12px;background:white;outline:none}.food-search button{padding:0 15px;border:0;border-radius:12px;background:var(--sage-dark);color:white;font-weight:700;cursor:pointer}
+ .search-results{display:flex;max-height:210px;overflow:auto;flex-direction:column;margin:0 0 12px;border:1px solid #e2ded3;border-radius:14px;background:white}.search-results button{display:flex;flex-direction:column;gap:4px;padding:11px 13px;border:0;border-bottom:1px solid #eeeae0;background:white;text-align:left;cursor:pointer}.search-results button:last-child{border-bottom:0}.search-results strong{font-size:12px}.search-results span{color:var(--muted);font-size:10px}
+ .field-heading{margin:0 0 7px;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.saved-foods{display:flex;gap:7px;overflow-x:auto;margin-bottom:14px;padding-bottom:4px}.saved-foods button{flex:0 0 auto;display:flex;flex-direction:column;gap:3px;padding:9px 11px;border:1px solid #dce3dd;border-radius:11px;background:#f8fbf8;text-align:left;cursor:pointer}.saved-foods strong{font-size:11px}.saved-foods span{color:var(--muted);font-size:9px}
++.saved-food-page{padding-top:8px}.page-help{margin:-2px 0 18px;color:var(--muted);font-size:12px;line-height:1.5}.saved-food-list{display:flex;flex-direction:column;gap:10px}.saved-food-card{display:flex;align-items:center;gap:14px;padding:16px;border:1px solid #e2dfd5;border-radius:17px;background:var(--card);box-shadow:0 6px 18px rgba(50,60,53,.045)}.saved-food-card>div{display:flex;min-width:0;flex:1;flex-direction:column;gap:4px}.saved-food-card strong{font-size:14px}.saved-food-card span,.saved-food-card small{color:var(--muted);font-size:11px}.saved-food-card button{padding:8px 12px;border:1px solid #d5ded7;border-radius:10px;background:#f4f8f5;color:var(--sage-dark);font-size:11px;font-weight:800;cursor:pointer}
+ .food-form label { display:flex; flex-direction:column; gap:6px; color:#4a574f; font-size:11px; font-weight:700; }
+-.food-form input { width:100%; padding:12px 13px; border:1px solid #dcd9d0; border-radius:11px; background:white; outline:none; }
+-.food-form input:focus { border-color:var(--sage); box-shadow:0 0 0 3px rgba(115,150,133,.13); }
++.food-form input,.food-form select { width:100%; padding:12px 13px; border:1px solid #dcd9d0; border-radius:11px; background:white; outline:none; }
++.food-form input:focus,.food-form select:focus { border-color:var(--sage); box-shadow:0 0 0 3px rgba(115,150,133,.13); }
+ .form-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+ .food-form .checkbox-row{flex-direction:row;align-items:center;gap:8px}.food-form .checkbox-row input{width:17px;height:17px}.food-form .checkbox-row span{font-size:12px}
+ .primary { padding:14px; border:0; border-radius:13px; background:var(--ink); color:white; font-weight:800; cursor:pointer; }.primary:disabled{opacity:.6}
