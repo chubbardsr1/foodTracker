@@ -5,6 +5,7 @@ import { profileFrom } from "../profile";
 
 const validMeals = new Set(["Breakfast", "Lunch", "Dinner", "Snacks"]);
 const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : NaN;
+const roundTwo = (value: number) => Math.round(value * 100) / 100;
 
 export async function GET(request: Request) {
   try {
@@ -23,15 +24,18 @@ export async function POST(request: Request) {
   try {
     const payload = await request.json() as Record<string, unknown>;
     const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? ""); const eatenOn = String(payload.eatenOn ?? "");
-    const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
-    if (!name || !serving || !validMeals.has(meal) || !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every nutrition field with a valid value" }, { status: 400 });
+    const servings = numberValue(payload.servings ?? 1);
+    const baseNutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
+    if (!name || !serving || !validMeals.has(meal) || !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn) || !Number.isFinite(servings) || servings <= 0 || servings > 100 || Object.values(baseNutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every nutrition field with a valid value" }, { status: 400 });
+    const nutrition = Object.fromEntries(Object.entries(baseNutrition).map(([key, value]) => [key, roundTwo(value * servings)])) as typeof baseNutrition;
+    const entryServing = servings === 1 ? serving : `${roundTwo(servings)} × ${serving}`;
     const db = getDb();
     const owner = profileFrom(request);
-    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving, ...nutrition }).returning();
+    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving: entryServing, ...nutrition }).returning();
     if (payload.saveCustom === true) {
-      await db.insert(customFoods).values({ owner, name, serving, ...nutrition }).onConflictDoUpdate({
+      await db.insert(customFoods).values({ owner, name, serving, ...baseNutrition }).onConflictDoUpdate({
         target: [customFoods.owner, customFoods.name, customFoods.serving],
-        set: nutrition,
+        set: baseNutrition,
       });
     }
     return Response.json({ entry }, { status: 201 });

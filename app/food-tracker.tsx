@@ -7,7 +7,7 @@ type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
 type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
 type WaterEntry = { id: number; drankOn: string; ounces: number };
 type ExerciseEntry = { id: number; exercisedOn: string; activity: string; minutes: number; calories: number };
-type Food = { id: number; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
+type Food = { id: number; name: string; serving: string; servingGrams?: number; calories: number; protein: number; fat: number; carbs: number; fiber: number };
 type Goals = { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number };
 
 const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
@@ -196,8 +196,9 @@ function AddFood({ meal, date, profile, onClose, onSaved }: { meal: Meal; date: 
     <div className="coming-soon"><span>✦</span><div><strong>{selected ? "Nutrition selected" : "Search or enter it yourself"}</strong><p>{selected ? "Review the serving and nutrition before saving." : "Foods entered manually can be saved to My Foods for next time."}</p></div></div>
     <form key={selected?.id ?? "manual"} onSubmit={submit} className="food-form"><input type="hidden" name="meal" value={meal} />
       <label>Food name<input name="name" placeholder="e.g. Scrambled eggs" required defaultValue={selected?.name ?? ""} /></label>
-      <label>Serving<input name="serving" placeholder="e.g. 2 large eggs" required defaultValue={selected?.serving ?? ""} /></label>
-      <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="1" required defaultValue={selected ? Math.round(selected.calories) : undefined} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.1" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.1" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.1" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.1" defaultValue={selected?.fiber ?? 0} required /></label></div>
+      <label>Serving<input name="serving" placeholder="e.g. 4 oz or 1/2 cup" required defaultValue={selected?.serving ?? ""} /></label>
+      <label>Servings eaten<input name="servings" type="number" min="0.01" max="100" step="0.01" required defaultValue="1.00" /><small>Use 0.50 for half a serving. Nutrition is adjusted automatically.</small></label>
+      <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={selected?.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" defaultValue={selected?.fiber ?? 0} required /></label></div>
       {!selected && <label className="checkbox-row"><input name="saveCustom" type="checkbox" defaultChecked /><span>Save this to My Foods</span></label>}
       {error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Add to diary"}</button>
     </form>

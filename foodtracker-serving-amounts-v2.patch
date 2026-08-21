@@ -1,0 +1,113 @@
+diff --git a/app/api/entries/route.ts b/app/api/entries/route.ts
+index 3f6b00d..de104eb 100644
+--- a/app/api/entries/route.ts
++++ b/app/api/entries/route.ts
+@@ -5,6 +5,7 @@ import { profileFrom } from "../profile";
+ 
+ const validMeals = new Set(["Breakfast", "Lunch", "Dinner", "Snacks"]);
+ const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : NaN;
++const roundTwo = (value: number) => Math.round(value * 100) / 100;
+ 
+ export async function GET(request: Request) {
+   try {
+@@ -23,15 +24,18 @@ export async function POST(request: Request) {
+   try {
+     const payload = await request.json() as Record<string, unknown>;
+     const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? ""); const eatenOn = String(payload.eatenOn ?? "");
+-    const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
+-    if (!name || !serving || !validMeals.has(meal) || !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every nutrition field with a valid value" }, { status: 400 });
++    const servings = numberValue(payload.servings ?? 1);
++    const baseNutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
++    if (!name || !serving || !validMeals.has(meal) || !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn) || !Number.isFinite(servings) || servings <= 0 || servings > 100 || Object.values(baseNutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every nutrition field with a valid value" }, { status: 400 });
++    const nutrition = Object.fromEntries(Object.entries(baseNutrition).map(([key, value]) => [key, roundTwo(value * servings)])) as typeof baseNutrition;
++    const entryServing = servings === 1 ? serving : `${roundTwo(servings)} × ${serving}`;
+     const db = getDb();
+     const owner = profileFrom(request);
+-    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving, ...nutrition }).returning();
++    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving: entryServing, ...nutrition }).returning();
+     if (payload.saveCustom === true) {
+-      await db.insert(customFoods).values({ owner, name, serving, ...nutrition }).onConflictDoUpdate({
++      await db.insert(customFoods).values({ owner, name, serving, ...baseNutrition }).onConflictDoUpdate({
+         target: [customFoods.owner, customFoods.name, customFoods.serving],
+-        set: nutrition,
++        set: baseNutrition,
+       });
+     }
+     return Response.json({ entry }, { status: 201 });
+diff --git a/app/api/foods/route.ts b/app/api/foods/route.ts
+index 8feb660..75e2505 100644
+--- a/app/api/foods/route.ts
++++ b/app/api/foods/route.ts
+@@ -6,6 +6,18 @@ function nutrient(food: UsdaFood, names: string[]) {
+   return Number(item?.value ?? 0);
+ }
+ 
++const GRAMS_PER_OUNCE = 28.349523125;
++function roundTwo(value: number) { return Math.round(value * 100) / 100; }
++
++function servingGrams(food: UsdaFood) {
++  const size = Number(food.servingSize);
++  if (!Number.isFinite(size) || size <= 0) return 100;
++  const unit = food.servingSizeUnit?.trim().toLowerCase();
++  if (unit === "g" || unit === "gram" || unit === "grams") return size;
++  if (unit === "oz" || unit === "ounce" || unit === "ounces") return size * GRAMS_PER_OUNCE;
++  return 100;
++}
++
+ export async function GET(request: Request) {
+   const query = new URL(request.url).searchParams.get("q")?.trim() ?? "";
+   if (query.length < 2) return Response.json({ foods: [] });
+@@ -16,12 +28,22 @@ export async function GET(request: Request) {
+     });
+     if (!response.ok) throw new Error("USDA food search is temporarily unavailable");
+     const data = await response.json() as { foods?: UsdaFood[] };
+-    const foods = (data.foods ?? []).map(food => ({
+-      id: food.fdcId, name: food.brandOwner ? `${food.description} — ${food.brandOwner}` : food.description,
+-      serving: "100 g",
+-      calories: nutrient(food, ["energy"]), protein: nutrient(food, ["protein"]), fat: nutrient(food, ["total lipid (fat)"]),
+-      carbs: nutrient(food, ["carbohydrate, by difference"]), fiber: nutrient(food, ["fiber, total dietary"]),
+-    }));
++    const foods = (data.foods ?? []).map(food => {
++      const grams = servingGrams(food);
++      const factor = grams / 100;
++      const ounces = roundTwo(grams / GRAMS_PER_OUNCE);
++      const household = food.householdServingFullText?.trim();
++      return {
++        id: food.fdcId, name: food.brandOwner ? `${food.description} — ${food.brandOwner}` : food.description,
++        serving: household ? `${household} (${ounces} oz)` : `${ounces} oz`,
++        servingGrams: roundTwo(grams),
++        calories: roundTwo(nutrient(food, ["energy"]) * factor),
++        protein: roundTwo(nutrient(food, ["protein"]) * factor),
++        fat: roundTwo(nutrient(food, ["total lipid (fat)"]) * factor),
++        carbs: roundTwo(nutrient(food, ["carbohydrate, by difference"]) * factor),
++        fiber: roundTwo(nutrient(food, ["fiber, total dietary"]) * factor),
++      };
++    });
+     return Response.json({ foods });
+   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to search foods" }, { status: 502 }); }
+ }
+diff --git a/app/food-tracker.tsx b/app/food-tracker.tsx
+index b89f7d7..d9bb6df 100644
+--- a/app/food-tracker.tsx
++++ b/app/food-tracker.tsx
+@@ -7,7 +7,7 @@ type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
+ type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
+ type WaterEntry = { id: number; drankOn: string; ounces: number };
+ type ExerciseEntry = { id: number; exercisedOn: string; activity: string; minutes: number; calories: number };
+-type Food = { id: number; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
++type Food = { id: number; name: string; serving: string; servingGrams?: number; calories: number; protein: number; fat: number; carbs: number; fiber: number };
+ type Goals = { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number };
+ 
+ const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
+@@ -196,8 +196,9 @@ function AddFood({ meal, date, profile, onClose, onSaved }: { meal: Meal; date:
+     <div className="coming-soon"><span>✦</span><div><strong>{selected ? "Nutrition selected" : "Search or enter it yourself"}</strong><p>{selected ? "Review the serving and nutrition before saving." : "Foods entered manually can be saved to My Foods for next time."}</p></div></div>
+     <form key={selected?.id ?? "manual"} onSubmit={submit} className="food-form"><input type="hidden" name="meal" value={meal} />
+       <label>Food name<input name="name" placeholder="e.g. Scrambled eggs" required defaultValue={selected?.name ?? ""} /></label>
+-      <label>Serving<input name="serving" placeholder="e.g. 2 large eggs" required defaultValue={selected?.serving ?? ""} /></label>
+-      <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="1" required defaultValue={selected ? Math.round(selected.calories) : undefined} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.1" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.1" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.1" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.1" defaultValue={selected?.fiber ?? 0} required /></label></div>
++      <label>Serving<input name="serving" placeholder="e.g. 4 oz or 1/2 cup" required defaultValue={selected?.serving ?? ""} /></label>
++      <label>Servings eaten<input name="servings" type="number" min="0.01" max="100" step="0.01" required defaultValue="1.00" /><small>Use 0.50 for half a serving. Nutrition is adjusted automatically.</small></label>
++      <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={selected?.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" defaultValue={selected?.fiber ?? 0} required /></label></div>
+       {!selected && <label className="checkbox-row"><input name="saveCustom" type="checkbox" defaultChecked /><span>Save this to My Foods</span></label>}
+       {error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Add to diary"}</button>
+     </form>
