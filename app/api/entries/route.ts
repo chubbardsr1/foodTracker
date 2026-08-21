@@ -1,6 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { customFoods, foodEntries, nutritionGoals } from "../../../db/schema";
+import { normalizeBarcode } from "../barcode/route";
 import { profileFrom } from "../profile";
 
 const validMeals = new Set(["Breakfast", "Lunch", "Dinner", "Snacks"]);
@@ -33,10 +34,20 @@ export async function POST(request: Request) {
     const owner = profileFrom(request);
     const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving: entryServing, ...nutrition }).returning();
     if (payload.saveCustom === true) {
-      await db.insert(customFoods).values({ owner, name, serving, ...baseNutrition }).onConflictDoUpdate({
-        target: [customFoods.owner, customFoods.name, customFoods.serving],
-        set: baseNutrition,
-      });
+      const barcode = payload.barcode ? normalizeBarcode(String(payload.barcode)) : null;
+      const existing = barcode
+        ? await db.select({ id: customFoods.id }).from(customFoods)
+            .where(and(eq(customFoods.owner, owner), eq(customFoods.barcode, barcode))).limit(1)
+        : [];
+      if (existing[0]) {
+        await db.update(customFoods).set({ name, serving, ...baseNutrition })
+          .where(and(eq(customFoods.id, existing[0].id), eq(customFoods.owner, owner)));
+      } else {
+        await db.insert(customFoods).values({ owner, name, serving, ...baseNutrition, barcode }).onConflictDoUpdate({
+          target: [customFoods.owner, customFoods.name, customFoods.serving],
+          set: { ...baseNutrition, ...(barcode ? { barcode } : {}) },
+        });
+      }
     }
     return Response.json({ entry }, { status: 201 });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to save food" }, { status: 500 }); }
