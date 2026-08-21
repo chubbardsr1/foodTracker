@@ -1,6 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { exerciseEntries } from "../../../db/schema";
+import { stampDailyGoal } from "../daily-goal";
 import { profileFrom } from "../profile";
 
 export async function GET(request: Request) {
@@ -26,7 +27,9 @@ export async function POST(request: Request) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(exercisedOn) || !activity || activity.length > 100 || !Number.isFinite(minutes) || minutes <= 0 || minutes > 1440 || !Number.isFinite(calories) || calories < 0 || calories > 10000) {
       return Response.json({ error: "Enter an activity, valid minutes, and optional calories burned" }, { status: 400 });
     }
-    const [entry] = await getDb().insert(exerciseEntries).values({ owner: profileFrom(request), exercisedOn, activity, minutes, calories }).returning();
+    const db = getDb(); const owner = profileFrom(request);
+    const [entry] = await db.insert(exerciseEntries).values({ owner, exercisedOn, activity, minutes, calories }).returning();
+    await stampDailyGoal(db, owner, exercisedOn);
     return Response.json({ entry }, { status: 201 });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Unable to add exercise" }, { status: 500 });

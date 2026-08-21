@@ -1,10 +1,13 @@
 import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { customFoods, foodEntries, nutritionGoals } from "../../../db/schema";
+import { normalizeBarcode } from "../barcode/route";
+import { stampDailyGoal } from "../daily-goal";
 import { profileFrom } from "../profile";
 
 const validMeals = new Set(["Breakfast", "Lunch", "Dinner", "Snacks"]);
 const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : NaN;
+const roundTwo = (value: number) => Math.round(value * 100) / 100;
 
 export async function GET(request: Request) {
   try {
@@ -23,19 +26,48 @@ export async function POST(request: Request) {
   try {
     const payload = await request.json() as Record<string, unknown>;
     const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? ""); const eatenOn = String(payload.eatenOn ?? "");
-    const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
-    if (!name || !serving || !validMeals.has(meal) || !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every nutrition field with a valid value" }, { status: 400 });
+    const servings = numberValue(payload.servings ?? 1);
+    const baseNutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
+    if (!name || !serving || !validMeals.has(meal) || !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn) || !Number.isFinite(servings) || servings <= 0 || servings > 100 || Object.values(baseNutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every nutrition field with a valid value" }, { status: 400 });
+    const nutrition = Object.fromEntries(Object.entries(baseNutrition).map(([key, value]) => [key, roundTwo(value * servings)])) as typeof baseNutrition;
+    const entryServing = servings === 1 ? serving : `${roundTwo(servings)} × ${serving}`;
     const db = getDb();
     const owner = profileFrom(request);
-    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving, ...nutrition }).returning();
+    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving: entryServing, ...nutrition }).returning();
+    await stampDailyGoal(db, owner, eatenOn);
     if (payload.saveCustom === true) {
-      await db.insert(customFoods).values({ owner, name, serving, ...nutrition }).onConflictDoUpdate({
-        target: [customFoods.owner, customFoods.name, customFoods.serving],
-        set: nutrition,
-      });
+      const barcode = payload.barcode ? normalizeBarcode(String(payload.barcode)) : null;
+      const existing = barcode
+        ? await db.select({ id: customFoods.id }).from(customFoods)
+            .where(and(eq(customFoods.owner, owner), eq(customFoods.barcode, barcode))).limit(1)
+        : [];
+      if (existing[0]) {
+        await db.update(customFoods).set({ name, serving, ...baseNutrition })
+          .where(and(eq(customFoods.id, existing[0].id), eq(customFoods.owner, owner)));
+      } else {
+        await db.insert(customFoods).values({ owner, name, serving, ...baseNutrition, barcode }).onConflictDoUpdate({
+          target: [customFoods.owner, customFoods.name, customFoods.serving],
+          set: { ...baseNutrition, ...(barcode ? { barcode } : {}) },
+        });
+      }
     }
     return Response.json({ entry }, { status: 201 });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to save food" }, { status: 500 }); }
+}
+
+export async function PUT(request: Request) {
+  try {
+    const payload = await request.json() as Record<string, unknown>;
+    const id = numberValue(payload.id);
+    const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? "");
+    const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
+    if (!Number.isInteger(id) || !name || !serving || !validMeals.has(meal) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every field with a valid value" }, { status: 400 });
+    const [entry] = await getDb().update(foodEntries).set({ meal, name, serving, ...nutrition })
+      .where(and(eq(foodEntries.id, id), eq(foodEntries.owner, profileFrom(request))))
+      .returning();
+    if (!entry) return Response.json({ error: "Diary entry was not found" }, { status: 404 });
+    return Response.json({ entry });
+  } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to update food" }, { status: 500 }); }
 }
 
 export async function DELETE(request: Request) {

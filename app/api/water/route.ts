@@ -1,6 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { waterEntries } from "../../../db/schema";
+import { stampDailyGoal } from "../daily-goal";
 import { profileFrom } from "../profile";
 
 export async function GET(request: Request) {
@@ -24,7 +25,9 @@ export async function POST(request: Request) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(drankOn) || !Number.isFinite(ounces) || ounces <= 0 || ounces > 256) {
       return Response.json({ error: "Enter a valid amount between 1 and 256 ounces" }, { status: 400 });
     }
-    const [entry] = await getDb().insert(waterEntries).values({ owner: profileFrom(request), drankOn, ounces }).returning();
+    const db = getDb(); const owner = profileFrom(request);
+    const [entry] = await db.insert(waterEntries).values({ owner, drankOn, ounces }).returning();
+    await stampDailyGoal(db, owner, drankOn);
     return Response.json({ entry }, { status: 201 });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Unable to add water" }, { status: 500 });

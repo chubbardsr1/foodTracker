@@ -1,7 +1,46 @@
 # Push Code to Production
 
+Run from `D:\webserver\foodTracker`.
+
+Apply any new migration to the remote D1 database first, then deploy the code.
+
+# Push new SQL
+
+npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\<migration-file>.sql
+
+Migrations already applied to production - never rerun these:
+
+- 0000_short_centennial.sql
+- 0001_profiles_water_custom_foods.sql
+- 0002_fiber_exercise.sql
+
+Not yet applied to production - run these in order, oldest first:
+
+- 0003_water_shortcuts.sql (per-profile water shortcut buttons, plus report
+  indexes on food_entries and exercise_entries)
+- 0004_custom_food_barcodes.sql (barcode column on custom_foods, plus a
+  unique index per owner and barcode)
+- 0005_daily_calorie_goals.sql (daily_goals table holding the calorie goal
+  that applied on each day, for the Calendar)
+
+# One-time secret setup - NOT part of a routine code push
+
+The meal assistant needs a Google Gemini API key stored as a Cloudflare
+secret. Run this once, and again only if the key is ever rotated. Wrangler
+prompts for the value, so the key never appears in a command line or a file:
+
+npx wrangler secret put GEMINI_API_KEY --name food-tracker
+
+For local development the same key goes in `.dev.vars`, which Git ignores.
+Copy `.dev.vars.example` to `.dev.vars` and fill it in.
+
+# Dependencies
+
+The barcode scanner needs its npm packages present before a build or deploy.
+Run this once after pulling these changes:
+
+npm install
+
+# Push Code
+
 npm run deploy
-
-# Push new SQL Example
-
-npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0003_migration_name.sql

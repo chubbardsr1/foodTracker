@@ -44,3 +44,4 @@ next-env.d.ts
 # Local Cloudflare database and secrets
 /.local-data/
 /.dev.vars*
+!/.dev.vars.example
