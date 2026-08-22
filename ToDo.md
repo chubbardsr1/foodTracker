@@ -44,28 +44,45 @@
 - Weight log: a Weight section records one weight per day in pounds with an
   optional note, listed newest first with the change from the previous
   reading. Entries can be corrected or removed, and Chris's and Sarah's logs
-  are separate. No goal weight or trend chart yet.
+  are separate. A chart above the log plots the recorded readings by date
+  over 1, 3, or 6 months or all of them, defaulting to 3 months, and shows
+  the starting weight, the latest weight, and the change across the chosen
+  period. Days without a weigh-in are left out rather than filled in. No
+  goal weight yet.
 
 - Daily journal: a Journal section holds one written entry per day, chosen
   with the same date strip as the Diary, with earlier entries listed below.
   Entries are written by hand for now. The chat recap that writes them
   automatically is still to come.
 
-- Reports: a Reports section now shows calories consumed and recorded
-  movement for a chosen date range, defaulting to the last seven calendar
+- Reports: a Reports section now shows calories consumed, recorded movement,
+  and steps for a chosen date range, defaulting to the last seven calendar
   days including today. It lists every date in the range, including days with
   no entries, and keeps Chris's and Sarah's data separate.
+
+- Steps: the Diary records one manually entered step total per person per
+  day. Only whole, non-negative numbers are accepted, the value can be
+  edited or removed, and it appears in the day's copied summary, in Reports,
+  and in exports.
+
+- Export centre: the Weight, Journal, and Reports pages each carry an export
+  panel built from one shared component. A start date, an end date, and the
+  sections to include are chosen; every section offered starts ticked and can
+  be turned off on its own. Both a printable PDF and a structured JSON file
+  are produced in the browser, with a Copy JSON button beside them. Only the
+  selected profile's data is included, and no database ids or keys ever
+  appear in the output.
 
 Future Ideas:
 Daily diary memo: One editable memo per user per date. It should not affect nutrition totals.
 Recap screenshot view: A clean, phone-sized summary card showing calories, net carbs, protein, fat, fiber, water, exercise minutes/calories, activity, weight if recorded, and date.
 Weekly weight log: Record date and weight, with an optional note. Weigh under similar conditions—same day, morning, after using the bathroom, before eating.
-Weight trend: Show change since last weigh-in, total loss, and a chart. Emphasize the longer trend rather than individual fluctuations.
+Weight trend: Done. The Weight page shows the change since the last weigh-in per row and a chart with 1, 3, 6 month and all-time ranges reporting the change across the period.
 Weekly summary: Seven-day averages for calories, protein, net carbs, fiber, water, and movement—not just totals.
 Monthly waist measurement: Optional, but helpful when weight temporarily stalls.
 Milestones: Starting weight, current weight, total lost, next goal, and ultimate goal.
 A1C history: Date and result whenever tested, since lowering it is one of your main goals.
-Export: Download diary, weight, and totals as CSV so your history is never trapped in the app.
+Export: Done as PDF and JSON from the Weight, Journal, and Reports pages. CSV is still an option if a spreadsheet is ever wanted.
 Target snapshot: Keep the goals used for each day so later goal changes do not rewrite past reports.
 
 The major unfinished pieces are:
@@ -73,7 +90,7 @@ The major unfinished pieces are:
 1. Improve USDA serving-size selection and nutrition scaling.
 2. Optionally add a dedicated Drinks category rather than entering caloric drinks as food.
 3. Chat-assisted daily recap that reads the day and writes the Journal entry.
-4. Weight trend: change since last weigh-in, total loss, and a chart.
+4. Goal weight and milestones on the Weight page.
 
 Every item from the original vision is now in place. Food can be added by
 hand, from a saved food, from USDA search, from a scanned barcode, or from an

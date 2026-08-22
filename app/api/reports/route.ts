@@ -1,6 +1,6 @@
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { exerciseEntries, foodEntries } from "../../../db/schema";
+import { exerciseEntries, foodEntries, stepEntries } from "../../../db/schema";
 import { profileFrom } from "../profile";
 
 const MAX_DAYS = 366;
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     if (dates.length > MAX_DAYS) return Response.json({ error: `Choose a range of ${MAX_DAYS} days or fewer` }, { status: 400 });
 
     const db = getDb(); const owner = profileFrom(request);
-    const [foodRows, exerciseRows] = await Promise.all([
+    const [foodRows, exerciseRows, stepRows] = await Promise.all([
       db.select({
         date: foodEntries.eatenOn,
         calories: sql<number>`sum(${foodEntries.calories})`,
@@ -50,12 +50,17 @@ export async function GET(request: Request) {
       }).from(exerciseEntries)
         .where(and(eq(exerciseEntries.owner, owner), gte(exerciseEntries.exercisedOn, start), lte(exerciseEntries.exercisedOn, end)))
         .groupBy(exerciseEntries.exercisedOn),
+      db.select({ date: stepEntries.steppedOn, steps: stepEntries.steps }).from(stepEntries)
+        .where(and(eq(stepEntries.owner, owner), gte(stepEntries.steppedOn, start), lte(stepEntries.steppedOn, end))),
     ]);
 
     const foodByDate = new Map(foodRows.map(row => [row.date, row]));
     const exerciseByDate = new Map(exerciseRows.map(row => [row.date, row]));
+    // A day without a step entry reports null, so "not recorded" never reads as a zero-step day.
+    const stepsByDate = new Map(stepRows.map(row => [row.date, row.steps]));
     const days = dates.map(date => {
       const food = foodByDate.get(date); const movement = exerciseByDate.get(date);
+      const steps = stepsByDate.get(date);
       return {
         date,
         calories: roundTwo(food?.calories ?? 0), protein: roundTwo(food?.protein ?? 0), fat: roundTwo(food?.fat ?? 0),
@@ -64,6 +69,7 @@ export async function GET(request: Request) {
         items: Number(food?.items ?? 0),
         exerciseMinutes: roundTwo(movement?.minutes ?? 0), exerciseCalories: roundTwo(movement?.calories ?? 0),
         sessions: Number(movement?.sessions ?? 0), activities: movement?.activities ?? "",
+        steps: steps === undefined ? null : Number(steps),
       };
     });
 
@@ -73,12 +79,16 @@ export async function GET(request: Request) {
       exerciseMinutes: roundTwo(days.reduce((sum, day) => sum + day.exerciseMinutes, 0)),
       exerciseCalories: roundTwo(days.reduce((sum, day) => sum + day.exerciseCalories, 0)),
       sessions: days.reduce((sum, day) => sum + day.sessions, 0),
+      steps: days.reduce((sum, day) => sum + (day.steps ?? 0), 0),
       daysInRange: days.length, daysWithFood, daysWithExercise: days.filter(day => day.sessions > 0).length,
+      daysWithSteps: days.filter(day => day.steps !== null).length,
     };
     const averages = {
       caloriesPerDay: roundTwo(totals.calories / days.length),
       caloriesPerLoggedDay: daysWithFood > 0 ? roundTwo(totals.calories / daysWithFood) : 0,
       exerciseMinutesPerDay: roundTwo(totals.exerciseMinutes / days.length),
+      // Averaged over the days that were actually recorded, so blank days do not drag it down.
+      stepsPerRecordedDay: totals.daysWithSteps > 0 ? Math.round(totals.steps / totals.daysWithSteps) : 0,
     };
     return Response.json({ start, end, days, totals, averages });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to build the report" }, { status: 500 }); }

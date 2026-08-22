@@ -18,12 +18,16 @@ fat, total carbohydrates, fiber, and net carbohydrates.
 - Editable calorie and macro goals
 - Per-profile water shortcut buttons plus a custom-ounce option
 - Water and exercise tracking
+- Manually entered daily step count, one total per person per day
 - Weekly Reports page for calories consumed and recorded movement
 - Calendar page colouring each day against the calorie goal that applied on
   that day
 - Weight log holding one reading per day, with an optional note and the
-  change from the previous reading
+  change from the previous reading, plus a weight-history chart with one,
+  three, six month, and all-time ranges
 - Daily journal holding one written entry per day
+- Export centre on the Weight, Journal, and Reports pages producing a
+  printable PDF or a structured JSON file for a chosen date range
 - Automatic net-carb calculation
 - Date-by-date history
 - Per-user data ownership when authenticated user headers are available
@@ -35,25 +39,65 @@ fat, total carbohydrates, fiber, and net carbohydrates.
 The application has six sections, selected from the navigation under the
 header:
 
-- **Diary** - the day's meals, macros, water, and exercise.
+- **Diary** - the day's meals, macros, water, exercise, and steps. Steps are
+  entered by hand as a whole number, one total per day, and can be corrected
+  or removed.
 - **My Foods** - editing reusable saved foods. Editing a saved food never
   changes diary entries that were already recorded.
 - **Calendar** - a month at a glance. Each day is coloured by how its
   calories compared with that day's goal, with a dot showing whether any
   movement was recorded.
-- **Reports** - calories consumed and movement recorded over a date range.
+- **Reports** - calories, movement, and steps recorded over a date range.
   The range defaults to the last seven calendar days including today, and a
   custom start and end date can be chosen. Dates with no entries are listed
-  with zero values.
+  with zero values; a date with no step entry shows a dash rather than a
+  zero, so "not recorded" never reads as a zero-step day. This page also
+  carries the complete export.
 - **Weight** - the weight log. A reading is entered in pounds against a date,
   with an optional note. Each date holds one reading, so re-weighing on a
   date corrects it rather than adding a second row, and every entry can be
   edited or removed. Readings are listed newest first with the change from
-  the previous reading.
+  the previous reading. A chart above the log plots the recorded readings by
+  date over one, three, or six months, or all of them, defaulting to three
+  months, and reports the starting weight, the latest weight, and the change
+  across the chosen period. Only real weigh-ins are plotted; days without a
+  reading are left out rather than filled in.
 - **Journal** - one written entry per day for how the day went. The day is
   chosen with the same date strip as the Diary, and earlier entries are
   listed below for jumping back. Entries are written by hand today; the
   planned chat recap will write them later.
+
+### Exporting
+
+Each of the Weight, Journal, and Reports pages carries an export panel built
+from one shared component, so every export comes from the same data. The
+Weight page exports weight readings, the Journal page exports written
+entries, and the Reports page exports everything.
+
+Choose a start date, an end date, and which sections to include. Every
+section offered on a page starts ticked and can be turned off on its own.
+The available sections are weight entries, journal entries, daily nutrition
+totals, individual food entries, water, exercise and movement, exercise
+calories, steps, and nutrition goals, including the calorie goal that was
+frozen onto each day in the range.
+
+Two formats are produced entirely in the browser:
+
+- **PDF** - a printable document with the name, the date range, the creation
+  date, each chosen section under its own heading, tables that repeat their
+  header when they run onto a new page, and a page number on every page.
+- **JSON** - a structured file for uploading into an analysis tool, plus a
+  Copy JSON button. Fields are named plainly, dates are ISO calendar dates,
+  and nutrition values stay as numbers rather than formatted strings. No
+  database ids, keys, or another profile's data are ever included.
+
+Files are named after the profile and the range, for example
+`chris-health-export-2026-08-01-to-2026-08-31.pdf`.
+
+An export only ever contains the currently selected profile's data. The
+start date must not be after the end date, at least one section must be
+chosen, and a range holding nothing shows a plain message instead of
+producing an empty file.
 
 Goals and the three water shortcut amounts are edited from the gear icon and
 are stored separately for each profile.

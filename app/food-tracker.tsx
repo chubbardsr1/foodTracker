@@ -1,13 +1,20 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ExportPanel from "./export-panel";
+import { exportSections as allExportSections } from "./export-shared";
+import {
+  type Profile, addDays, amount, localDate, longDate,
+  profileNames, round, shortDate, weekdayLabel, whole,
+} from "./shared";
+import WeightChart from "./weight-chart";
 
-type Profile = "chris" | "sarah";
 type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
 type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
 type WaterEntry = { id: number; drankOn: string; ounces: number };
 type ExerciseEntry = { id: number; exercisedOn: string; activity: string; minutes: number; calories: number };
 type WeightEntry = { id: number; weighedOn: string; pounds: number; note: string };
+type StepEntry = { id: number; steppedOn: string; steps: number };
 type JournalEntry = { id: number; entryOn: string; body: string; source: string; updatedAt: string };
 type Food = { id: number; name: string; serving: string; servingGrams?: number; calories: number; protein: number; fat: number; carbs: number; fiber: number; barcode?: string | null };
 /** Prefill for the Add Food form. Missing nutrition stays undefined so the field renders empty. */
@@ -31,13 +38,12 @@ type CalendarDay = {
   exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string;
   hasMovement: boolean; hasData: boolean;
 };
-type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string };
-type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; daysInRange: number; daysWithFood: number; daysWithExercise: number };
-type ReportAverages = { caloriesPerDay: number; caloriesPerLoggedDay: number; exerciseMinutesPerDay: number };
+type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string; steps: number | null };
+type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; steps: number; daysInRange: number; daysWithFood: number; daysWithExercise: number; daysWithSteps: number };
+type ReportAverages = { caloriesPerDay: number; caloriesPerLoggedDay: number; exerciseMinutesPerDay: number; stepsPerRecordedDay: number };
 
 const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
 const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, fiber: 25, waterOunces: 64, waterShortcutOne: 6, waterShortcutTwo: 8, waterShortcutThree: 12 };
-const profileNames: Record<Profile, string> = { chris: "Chris", sarah: "Sarah" };
 const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "diary", label: "Diary", title: "Nourish", eyebrow: "Daily Food Tracker" },
   { id: "foods", label: "My Foods", title: "My Foods", eyebrow: "Reusable entries" },
@@ -58,12 +64,6 @@ function defaultMealForNow(): Meal {
 const statusLabels: Record<CalendarDay["status"], string> = {
   none: "Nothing logged", under: "Under goal", over: "Over goal", "way-over": "More than 500 over",
 };
-function isoDate(value: Date) { return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`; }
-function localDate() { return isoDate(new Date()); }
-function addDays(date: string, days: number) { const next = new Date(`${date}T12:00:00`); next.setDate(next.getDate() + days); return isoDate(next); }
-function round(value: number) { return Math.round(value * 10) / 10; }
-/** Trims trailing zeros so 6 shows as "6" and 7.50 shows as "7.5". */
-function amount(value: number) { return String(Math.round(value * 100) / 100); }
 const nutritionLabels: Record<string, string> = { calories: "Calories", protein: "Protein", fat: "Fat", carbs: "Total carbs", fiber: "Fiber" };
 const barcodeDigits = (value: string) => value.replace(/\D/g, "");
 function monthKey(date: string) { return date.slice(0, 7); }
@@ -73,9 +73,6 @@ function shiftMonth(month: string, step: number) {
   return `${moved.getUTCFullYear()}-${String(moved.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 function monthLabel(month: string) { return new Date(`${month}-01T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" }); }
-function longDate(date: string) { return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }); }
-function shortDate(date: string) { return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
-function weekdayLabel(date: string) { return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short" }); }
 
 export default function FoodTracker() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -83,6 +80,7 @@ export default function FoodTracker() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [water, setWater] = useState<WaterEntry[]>([]);
   const [exercise, setExercise] = useState<ExerciseEntry[]>([]);
+  const [steps, setSteps] = useState<StepEntry | null>(null);
   const [goals, setGoals] = useState<Goals>(defaultGoals);
   const [loading, setLoading] = useState(true);
   // `locked` is true when the meal is already known, e.g. the + on a meal card.
@@ -93,6 +91,8 @@ export default function FoodTracker() {
   const [view, setView] = useState<View>("diary");
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [message, setMessage] = useState("");
+  // Bumped on every copy so the same confirmation can be shown twice running.
+  const [copyNote, setCopyNote] = useState<{ id: number; text: string } | null>(null);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("foodTrackerProfile");
@@ -109,25 +109,34 @@ export default function FoodTracker() {
     if (!profile) return;
     setLoading(true);
     try {
-      const [foodResponse, waterResponse, exerciseResponse] = await Promise.all([
+      const [foodResponse, waterResponse, exerciseResponse, stepsResponse] = await Promise.all([
         fetch(`/api/entries?date=${day}`, { headers }),
         fetch(`/api/water?date=${day}`, { headers }),
         fetch(`/api/exercise?date=${day}`, { headers }),
+        fetch(`/api/steps?date=${day}`, { headers }),
       ]);
       const foodData = await foodResponse.json();
       const waterData = await waterResponse.json();
       const exerciseData = await exerciseResponse.json();
+      const stepsData = await stepsResponse.json();
       if (!foodResponse.ok) throw new Error(foodData.error ?? "Unable to load entries");
       if (!waterResponse.ok) throw new Error(waterData.error ?? "Unable to load water");
       if (!exerciseResponse.ok) throw new Error(exerciseData.error ?? "Unable to load exercise");
+      if (!stepsResponse.ok) throw new Error(stepsData.error ?? "Unable to load steps");
       setEntries(foodData.entries ?? []);
       setWater(waterData.entries ?? []);
       setExercise(exerciseData.entries ?? []);
+      setSteps(stepsData.entry ?? null);
       setGoals({ ...defaultGoals, ...(foodData.goals ?? {}) });
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load this day"); }
     finally { setLoading(false); }
   }
   useEffect(() => { void loadDay(date); }, [date, profile]);
+  useEffect(() => {
+    if (!copyNote) return;
+    const timer = setTimeout(() => setCopyNote(null), 2500);
+    return () => clearTimeout(timer);
+  }, [copyNote]);
 
   const totals = useMemo(() => entries.reduce((sum, item) => ({
     calories: sum.calories + item.calories, protein: sum.protein + item.protein,
@@ -138,9 +147,57 @@ export default function FoodTracker() {
   const exerciseMinutes = exercise.reduce((sum, item) => sum + item.minutes, 0);
   const exerciseCalories = exercise.reduce((sum, item) => sum + item.calories, 0);
 
+
+  /** Plain-text version of the numbers on this screen, for pasting elsewhere. */
+  function dayReport() {
+    const over = totals.calories - goals.calories;
+    const lines = [
+      longDate(date),
+      "",
+      `Calories: ${Math.round(totals.calories)} of ${goals.calories} (${over > 0 ? `${Math.round(over)} over` : `${Math.round(-over)} remaining`})`,
+      `Net carbs: ${round(totals.netCarbs)}g of ${goals.netCarbs}g`,
+      `Protein: ${round(totals.protein)}g of ${goals.protein}g`,
+      `Fat: ${round(totals.fat)}g of ${goals.fat}g`,
+      `Fiber: ${round(totals.fiber)}g of ${goals.fiber}g`,
+      "",
+      `Activity: ${round(exerciseMinutes)} minutes${exerciseCalories > 0 ? ` · ${Math.round(exerciseCalories)} calories burned` : ""}`,
+    ];
+    if (exercise.length === 0) lines.push("- Nothing logged");
+    else for (const item of exercise) lines.push(`- ${item.activity}: ${round(item.minutes)} min${item.calories > 0 ? `, ${Math.round(item.calories)} cal` : ""}`);
+    lines.push("", `Steps: ${steps ? whole(steps.steps) : "not recorded"}`);
+    lines.push("", `Hydration: ${amount(waterTotal)} of ${goals.waterOunces} oz`);
+    return lines.join("\n");
+  }
+
+  async function copyDay() {
+    const text = dayReport();
+    const note = (result: string) => setCopyNote(current => ({ id: (current?.id ?? 0) + 1, text: result }));
+    try {
+      await navigator.clipboard.writeText(text);
+      note("Copied.");
+      return;
+    } catch {
+      // iPhone Safari refuses the clipboard API outside a secure context and
+      // in some in-app browsers, so fall back to the older selection copy.
+    }
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "0";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    area.setSelectionRange(0, text.length);
+    let copied = false;
+    try { copied = document.execCommand("copy"); } catch { copied = false; }
+    document.body.removeChild(area);
+    note(copied ? "Copied." : "Copying was blocked by this browser.");
+  }
+
   function selectProfile(next: Profile) {
     window.localStorage.setItem("foodTrackerProfile", next);
-    setEntries([]); setWater([]); setExercise([]); setGoals(defaultGoals); setProfile(next);
+    setEntries([]); setWater([]); setExercise([]); setSteps(null); setGoals(defaultGoals); setProfile(next);
   }
   function shiftDate(days: number) { setDate(addDays(date, days)); }
   async function removeEntry(id: number) {
@@ -208,11 +265,17 @@ export default function FoodTracker() {
         <Macro label="Fat" value={round(totals.fat)} goal={goals.fat} color="gold" />
         <Macro label="Fiber" value={round(totals.fiber)} goal={goals.fiber} color="green" />
       </section>
+      <div className="copy-day">
+        <button type="button" onClick={() => void copyDay()}>⧉ Copy this day</button>
+        <small aria-live="polite">{copyNote?.text ?? ""}</small>
+      </div>
       <section className="exercise-card">
         <div className="exercise-heading"><div className="exercise-icon">↗</div><div><p className="eyebrow">Movement</p><h2>{round(exerciseMinutes)} <small>minutes</small></h2></div><button onClick={() => setExerciseOpen(true)}>+ Add exercise</button></div>
         <p className="exercise-summary">{exerciseCalories > 0 ? `${Math.round(exerciseCalories)} estimated calories burned` : exercise.length > 0 ? "Exercise logged for today" : "No exercise logged yet"}</p>
         {exercise.length > 0 && <div className="exercise-history">{exercise.map(item => <div key={item.id}><span><strong>{item.activity}</strong><small>{round(item.minutes)} min{item.calories > 0 ? ` · ${Math.round(item.calories)} cal` : ""}</small></span><button onClick={() => void removeExercise(item.id)} aria-label={`Remove ${item.activity}`}>×</button></div>)}</div>}
       </section>
+      <StepsCard key={`${profile}:${date}`} date={date} profile={profile} entry={steps}
+        onSaved={entry => setSteps(entry)} onRemoved={() => setSteps(null)} onError={setMessage} />
       <section className="water-card">
         <div className="water-heading"><div className="water-drop">◒</div><div><p className="eyebrow">Hydration</p><h2>{amount(waterTotal)} <small>of {goals.waterOunces} oz</small></h2></div></div>
         <div className="water-progress"><i style={{ width: `${Math.min(100, waterTotal / goals.waterOunces * 100)}%` }} /></div>
@@ -241,6 +304,67 @@ export default function FoodTracker() {
     {exerciseOpen && <AddExercise date={date} profile={profile} onClose={() => setExerciseOpen(false)} onSaved={(entry) => { setExercise(current => [...current, entry]); setExerciseOpen(false); }} />}
     {editingEntry && <EditDiaryEntry entry={editingEntry} profile={profile} onClose={() => setEditingEntry(null)} onSaved={(entry) => { setEntries(current => current.map(item => item.id === entry.id ? entry : item)); setEditingEntry(null); }} />}
   </main>;
+}
+
+/**
+ * The day's step count: one whole number per profile per day.
+ *
+ * Saving replaces whatever the day already held, so there is never a second
+ * row for the same date. The value is validated here as well as on the server
+ * so a decimal or a negative is refused before it leaves the phone.
+ */
+function StepsCard({ date, profile, entry, onSaved, onRemoved, onError }: {
+  date: string; profile: Profile; entry: StepEntry | null;
+  onSaved: (entry: StepEntry) => void; onRemoved: () => void; onError: (message: string) => void;
+}) {
+  const [value, setValue] = useState(entry ? String(entry.steps) : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
+  const trimmed = value.trim();
+  const dirty = trimmed !== (entry ? String(entry.steps) : "");
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(""); setNotice("");
+    if (!/^\d+$/.test(trimmed)) { setError("Enter a whole number of steps, 0 or more."); return; }
+    if (Number(trimmed) > 200000) { setError("That is more steps than a day allows. Check the number."); return; }
+    setBusy(true);
+    const response = await fetch("/api/steps", {
+      method: "PUT", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ steppedOn: date, steps: Number(trimmed) }),
+    });
+    const result = await response.json().catch(() => ({}));
+    setBusy(false);
+    if (!response.ok) { setError(result.error ?? "Unable to save those steps"); return; }
+    onSaved(result.entry); setValue(String(result.entry.steps)); setNotice("Saved.");
+  }
+
+  async function remove() {
+    setError(""); setNotice(""); setBusy(true);
+    const response = await fetch(`/api/steps?date=${date}`, { method: "DELETE", headers });
+    setBusy(false);
+    if (!response.ok) { onError("Unable to remove those steps"); return; }
+    onRemoved(); setValue(""); setNotice("Removed.");
+  }
+
+  return <section className="steps-card">
+    <div className="steps-heading">
+      <div className="steps-icon" aria-hidden="true">⇡</div>
+      <div><p className="eyebrow">Steps</p><h2>{entry ? whole(entry.steps) : "—"} <small>{entry ? "steps today" : "not recorded"}</small></h2></div>
+    </div>
+    <form className="steps-form" onSubmit={save}>
+      <label className="sr-label" htmlFor={`steps-${date}`}>Steps for this day</label>
+      <input id={`steps-${date}`} inputMode="numeric" pattern="[0-9]*" type="number" min="0" max="200000" step="1"
+        placeholder="e.g. 8500" value={value}
+        onChange={event => { setValue(event.target.value); setError(""); setNotice(""); }} />
+      <button type="submit" className="primary" disabled={busy || !dirty || trimmed === ""}>{busy ? "Saving…" : entry ? "Update" : "Save"}</button>
+      {entry && <button type="button" className="steps-remove" onClick={() => void remove()} disabled={busy} aria-label="Remove the steps for this day">×</button>}
+    </form>
+    {error && <p className="form-error">{error}</p>}
+    {notice && <p className="steps-notice" aria-live="polite">{notice}</p>}
+  </section>;
 }
 
 function MyFoodsPage({ profile }: { profile: Profile }) {
@@ -412,7 +536,11 @@ function ReportsPage({ profile }: { profile: Profile }) {
 
   return <section className="report-page">
     <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Calories & movement</h2></div><span>{days.length} {days.length === 1 ? "day" : "days"}</span></div>
-    <p className="page-help">Every date in the range is listed. Days without entries show zero.</p>
+    <p className="page-help">Every date in the range is listed. Days without entries show zero, and a day with no step entry shows a dash rather than a zero.</p>
+
+    <ExportPanel profile={profile} eyebrow="Export centre" title="Export everything"
+      help="A complete export of this profile. Pick a date range, keep or clear any section, then take it as a printable PDF or as JSON for an analysis tool."
+      sections={[...allExportSections]} />
 
     <div className="report-range">
       <label>Start<input type="date" value={start} max={end} onChange={event => setStart(event.target.value)} /></label>
@@ -431,6 +559,7 @@ function ReportsPage({ profile }: { profile: Profile }) {
         <div className="report-stat"><span>Average per day</span><strong>{amount(averages?.caloriesPerDay ?? 0)}</strong><small>{amount(averages?.caloriesPerLoggedDay ?? 0)} per logged day</small></div>
         <div className="report-stat"><span>Movement</span><strong>{amount(totals?.exerciseMinutes ?? 0)} <i>min</i></strong><small>{amount(averages?.exerciseMinutesPerDay ?? 0)} min per day</small></div>
         <div className="report-stat"><span>Calories burned</span><strong>{amount(totals?.exerciseCalories ?? 0)}</strong><small>{totals?.sessions ?? 0} recorded {(totals?.sessions ?? 0) === 1 ? "session" : "sessions"}</small></div>
+        <div className="report-stat"><span>Steps</span><strong>{whole(totals?.steps ?? 0)}</strong><small>{whole(averages?.stepsPerRecordedDay ?? 0)} per recorded day · {totals?.daysWithSteps ?? 0} of {days.length} days</small></div>
       </div>
 
       <div className="report-chart">
@@ -453,13 +582,14 @@ function ReportsPage({ profile }: { profile: Profile }) {
       <div className="report-table-wrap">
         <table className="report-table">
           <caption className="report-visually-hidden">Daily calories and movement for {profileNames[profile]}</caption>
-          <thead><tr><th scope="col">Day</th><th scope="col">Calories</th><th scope="col">Minutes</th><th scope="col">Burned</th></tr></thead>
-          <tbody>{days.map(day => <tr key={day.date} className={day.items === 0 && day.sessions === 0 ? "report-empty-day" : ""}>
+          <thead><tr><th scope="col">Day</th><th scope="col">Calories</th><th scope="col">Minutes</th><th scope="col">Burned</th><th scope="col">Steps</th></tr></thead>
+          <tbody>{days.map(day => <tr key={day.date} className={day.items === 0 && day.sessions === 0 && day.steps === null ? "report-empty-day" : ""}>
             <th scope="row"><strong>{weekdayLabel(day.date)} {shortDate(day.date)}</strong>{day.activities && <small>{day.activities}</small>}</th>
             <td>{amount(day.calories)}</td><td>{amount(day.exerciseMinutes)}</td><td>{amount(day.exerciseCalories)}</td>
+            <td>{day.steps === null ? "—" : whole(day.steps)}</td>
           </tr>)}</tbody>
-          <tfoot><tr><th scope="row">Total</th><td>{amount(totals?.calories ?? 0)}</td><td>{amount(totals?.exerciseMinutes ?? 0)}</td><td>{amount(totals?.exerciseCalories ?? 0)}</td></tr>
-            <tr><th scope="row">Daily average</th><td>{amount(averages?.caloriesPerDay ?? 0)}</td><td>{amount(averages?.exerciseMinutesPerDay ?? 0)}</td><td>{amount(Math.round((totals?.exerciseCalories ?? 0) / days.length * 100) / 100)}</td></tr></tfoot>
+          <tfoot><tr><th scope="row">Total</th><td>{amount(totals?.calories ?? 0)}</td><td>{amount(totals?.exerciseMinutes ?? 0)}</td><td>{amount(totals?.exerciseCalories ?? 0)}</td><td>{whole(totals?.steps ?? 0)}</td></tr>
+            <tr><th scope="row">Daily average</th><td>{amount(averages?.caloriesPerDay ?? 0)}</td><td>{amount(averages?.exerciseMinutesPerDay ?? 0)}</td><td>{amount(Math.round((totals?.exerciseCalories ?? 0) / days.length * 100) / 100)}</td><td>{whole(averages?.stepsPerRecordedDay ?? 0)}</td></tr></tfoot>
         </table>
       </div>
     </>}
@@ -493,6 +623,8 @@ function WeightPage({ profile }: { profile: Profile }) {
 
   /** Newest first, so the reading before a row is the next one in the list. */
   const sorted = useMemo(() => [...entries].sort((a, b) => b.weighedOn.localeCompare(a.weighedOn)), [entries]);
+  /** Oldest reading on record, which lets the export offer an "All recorded" range. */
+  const oldest = sorted.length > 0 ? sorted[sorted.length - 1].weighedOn : null;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setFormError("");
@@ -517,6 +649,12 @@ function WeightPage({ profile }: { profile: Profile }) {
   return <section className="weight-page">
     <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Weight log</h2></div><span>{sorted.length} {sorted.length === 1 ? "entry" : "entries"}</span></div>
     <p className="page-help">Log your weight as often as you like — weekly is plenty. One reading is kept per day, and any entry can be corrected or removed.</p>
+
+    {!loading && <WeightChart entries={sorted} />}
+
+    <ExportPanel profile={profile} eyebrow="Export centre" title="Export weight history"
+      help="Take this weight log as a printable PDF or as JSON. Only your own readings are included."
+      sections={["weights"]} earliest={oldest} />
 
     <form key={formKey} className="food-form weight-form" onSubmit={submit}>
       <div className="form-grid">
@@ -651,6 +789,10 @@ function JournalPage({ profile }: { profile: Profile }) {
   return <section className="journal-page">
     <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Daily journal</h2></div><span>{entries.length} {entries.length === 1 ? "day" : "days"}</span></div>
     <p className="page-help">One entry per day for how the day went. Write it yourself for now — the assisted recap will fill this in later.</p>
+
+    <ExportPanel profile={profile} eyebrow="Export centre" title="Export journal entries"
+      help="Take your written entries as a printable PDF or as JSON. Only your own journal is included."
+      sections={["journalEntries"]} earliest={entries.length > 0 ? entries[entries.length - 1].entryOn : null} />
 
     <section className="date-nav" aria-label="Choose journal date">
       <button type="button" onClick={() => setDate(addDays(date, -1))} aria-label="Previous day">‹</button>

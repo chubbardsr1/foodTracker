@@ -44,7 +44,7 @@ export const waterEntries = sqliteTable("water_entries", {
   drankOn: text("drank_on").notNull(),
   ounces: real("ounces").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+}, table => [index("water_entries_owner_date_idx").on(table.owner, table.drankOn)]);
 
 export const exerciseEntries = sqliteTable("exercise_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -103,3 +103,16 @@ export const journalEntries = sqliteTable("journal_entries", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, table => [uniqueIndex("journal_entries_owner_day_idx").on(table.owner, table.entryOn)]);
+
+/**
+ * Manually entered step count. One total per owner per day, so re-entering a
+ * day's steps corrects it rather than stacking a second row beside it.
+ */
+export const stepEntries = sqliteTable("step_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  owner: text("owner").notNull(),
+  steppedOn: text("stepped_on").notNull(),
+  steps: integer("steps").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, table => [uniqueIndex("step_entries_owner_day_idx").on(table.owner, table.steppedOn)]);
