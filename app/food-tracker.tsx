@@ -7,6 +7,8 @@ type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
 type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
 type WaterEntry = { id: number; drankOn: string; ounces: number };
 type ExerciseEntry = { id: number; exercisedOn: string; activity: string; minutes: number; calories: number };
+type WeightEntry = { id: number; weighedOn: string; pounds: number; note: string };
+type JournalEntry = { id: number; entryOn: string; body: string; source: string; updatedAt: string };
 type Food = { id: number; name: string; serving: string; servingGrams?: number; calories: number; protein: number; fat: number; carbs: number; fiber: number; barcode?: string | null };
 /** Prefill for the Add Food form. Missing nutrition stays undefined so the field renders empty. */
 type Draft = { id?: number; name: string; serving: string; calories?: number; protein?: number; fat?: number; carbs?: number; fiber?: number; barcode?: string | null };
@@ -22,7 +24,7 @@ type ScannedProduct = {
   missing: string[]; source: string; attribution: string;
 };
 type Goals = { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number };
-type View = "diary" | "foods" | "reports" | "calendar";
+type View = "diary" | "foods" | "reports" | "calendar" | "weight" | "journal";
 type CalendarDay = {
   date: string; calories: number; items: number; goalCalories: number; goalSource: "saved" | "current";
   remaining: number; status: "none" | "under" | "over" | "way-over";
@@ -41,6 +43,8 @@ const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "foods", label: "My Foods", title: "My Foods", eyebrow: "Reusable entries" },
   { id: "calendar", label: "Calendar", title: "Calendar", eyebrow: "Day by day" },
   { id: "reports", label: "Reports", title: "Reports", eyebrow: "Calories & movement" },
+  { id: "weight", label: "Weight", title: "Weight", eyebrow: "Your weight log" },
+  { id: "journal", label: "Journal", title: "Journal", eyebrow: "Daily recap" },
 ];
 const weekdayInitials = ["S", "M", "T", "W", "T", "F", "S"];
 /** Sensible starting meal when the Add food button does not know which one. */
@@ -182,6 +186,8 @@ export default function FoodTracker() {
     {view === "foods" && <MyFoodsPage profile={profile} />}
     {view === "calendar" && <CalendarPage profile={profile} onOpenDay={date => { setDate(date); setView("diary"); }} />}
     {view === "reports" && <ReportsPage profile={profile} />}
+    {view === "weight" && <WeightPage profile={profile} />}
+    {view === "journal" && <JournalPage profile={profile} />}
 
     {view === "diary" && <>
       <section className="date-nav" aria-label="Choose tracking date">
@@ -457,6 +463,230 @@ function ReportsPage({ profile }: { profile: Profile }) {
         </table>
       </div>
     </>}
+  </section>;
+}
+
+/**
+ * Weight log: one reading per day, newest first, with the change from the
+ * previous reading so a run of entries reads as a trend.
+ */
+function WeightPage({ profile }: { profile: Profile }) {
+  const [entries, setEntries] = useState<WeightEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [editing, setEditing] = useState<WeightEntry | null>(null);
+  const [formKey, setFormKey] = useState(0);
+  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    fetch("/api/weight", { headers })
+      .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? "Unable to load your weight log"); return data; })
+      .then(data => { if (!active) return; setError(""); setEntries(data.entries ?? []); })
+      .catch(reason => { if (!active) return; setError(reason instanceof Error ? reason.message : "Unable to load your weight log"); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [headers]);
+
+  /** Newest first, so the reading before a row is the next one in the list. */
+  const sorted = useMemo(() => [...entries].sort((a, b) => b.weighedOn.localeCompare(a.weighedOn)), [entries]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setFormError("");
+    const form = new FormData(event.currentTarget);
+    const response = await fetch("/api/weight", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ weighedOn: form.get("weighedOn"), pounds: Number(form.get("pounds")), note: form.get("note") ?? "" }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { setFormError(result.error ?? "Unable to save that weight"); setBusy(false); return; }
+    setEntries(current => [...current, result.entry]);
+    setFormKey(current => current + 1);
+    setBusy(false);
+  }
+
+  async function remove(entry: WeightEntry) {
+    const response = await fetch(`/api/weight?id=${entry.id}`, { method: "DELETE", headers });
+    if (response.ok) setEntries(current => current.filter(item => item.id !== entry.id));
+    else setError("Unable to remove that weight entry");
+  }
+
+  return <section className="weight-page">
+    <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Weight log</h2></div><span>{sorted.length} {sorted.length === 1 ? "entry" : "entries"}</span></div>
+    <p className="page-help">Log your weight as often as you like — weekly is plenty. One reading is kept per day, and any entry can be corrected or removed.</p>
+
+    <form key={formKey} className="food-form weight-form" onSubmit={submit}>
+      <div className="form-grid">
+        <label>Date<input name="weighedOn" type="date" required defaultValue={localDate()} max={localDate()} /></label>
+        <label>Weight (lbs)<input name="pounds" type="number" min="0.01" max="1500" step="0.01" required placeholder="e.g. 214.50" /></label>
+      </div>
+      <label>Note (optional)<input name="note" maxLength={240} placeholder="e.g. morning, after the gym" /></label>
+      {formError && <p className="form-error">{formError}</p>}
+      <button className="primary" disabled={busy}>{busy ? "Saving…" : "Log this weight"}</button>
+    </form>
+
+    {error && <p className="form-error">{error}</p>}
+    {loading ? <div className="empty-state">Loading your weight log…</div>
+      : sorted.length === 0 ? <div className="empty-state">No weights logged yet. Add your first one above.</div>
+      : <div className="weight-list">{sorted.map((entry, index) => {
+          const previous = sorted[index + 1];
+          const change = previous ? Math.round((entry.pounds - previous.pounds) * 100) / 100 : null;
+          return <article className="weight-row" key={entry.id}>
+            <div className="weight-main">
+              <strong>{amount(entry.pounds)} <i>lbs</i></strong>
+              <span>{longDate(entry.weighedOn)}</span>
+              {entry.note && <small className="weight-note">{entry.note}</small>}
+            </div>
+            <span className={`weight-change${change === null ? " first" : change > 0 ? " up" : change < 0 ? " down" : ""}`}>
+              {change === null ? "First entry" : change === 0 ? "No change" : `${change > 0 ? "+" : "−"}${amount(Math.abs(change))} lbs`}
+              {change !== null && <small>since {shortDate(previous.weighedOn)}</small>}
+            </span>
+            <div className="weight-actions">
+              <button type="button" onClick={() => setEditing(entry)} aria-label={`Edit the weight for ${longDate(entry.weighedOn)}`}>✎</button>
+              <button type="button" onClick={() => void remove(entry)} aria-label={`Remove the weight for ${longDate(entry.weighedOn)}`}>×</button>
+            </div>
+          </article>;
+        })}</div>}
+
+    {editing && <EditWeight entry={editing} profile={profile} onClose={() => setEditing(null)}
+      onSaved={entry => { setEntries(current => current.map(item => item.id === entry.id ? entry : item)); setEditing(null); }} />}
+  </section>;
+}
+
+function EditWeight({ entry, profile, onClose, onSaved }: { entry: WeightEntry; profile: Profile; onClose: () => void; onSaved: (entry: WeightEntry) => void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("");
+    const form = new FormData(event.currentTarget);
+    const response = await fetch("/api/weight", {
+      method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" },
+      body: JSON.stringify({ id: entry.id, weighedOn: form.get("weighedOn"), pounds: Number(form.get("pounds")), note: form.get("note") ?? "" }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { setError(result.error ?? "Unable to update that weight"); setBusy(false); return; }
+    onSaved(result.entry);
+  }
+  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true">
+    <div className="modal-head"><div><p className="eyebrow">Weight log</p><h2>Edit weight</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
+    <form className="food-form" onSubmit={submit}>
+      <div className="form-grid">
+        <label>Date<input name="weighedOn" type="date" required defaultValue={entry.weighedOn} /></label>
+        <label>Weight (lbs)<input name="pounds" type="number" min="0.01" max="1500" step="0.01" required defaultValue={amount(entry.pounds)} autoFocus /></label>
+      </div>
+      <label>Note (optional)<input name="note" maxLength={240} defaultValue={entry.note} /></label>
+      {error && <p className="form-error">{error}</p>}
+      <button className="primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button>
+    </form>
+  </div></div>;
+}
+
+/**
+ * One journal entry per day, written by hand.
+ *
+ * The day being written is chosen with the same date strip as the diary, and
+ * that day's entry is loaded on its own so a day older than the recent list
+ * still opens correctly.
+ */
+function JournalPage({ profile }: { profile: Profile }) {
+  const [date, setDate] = useState(localDate());
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
+  const [body, setBody] = useState("");
+  const [saved, setSaved] = useState<JournalEntry | null>(null);
+  const [loadingDay, setLoadingDay] = useState(true);
+  const [loadingList, setLoadingList] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [listKey, setListKey] = useState(0);
+  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingDay(true); setNotice("");
+    fetch(`/api/journal?date=${date}`, { headers })
+      .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? "Unable to load that day"); return data; })
+      .then(data => { if (!active) return; setError(""); setSaved(data.entry ?? null); setBody(data.entry?.body ?? ""); })
+      .catch(reason => { if (!active) return; setError(reason instanceof Error ? reason.message : "Unable to load that day"); })
+      .finally(() => { if (active) setLoadingDay(false); });
+    return () => { active = false; };
+  }, [date, headers]);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingList(true);
+    fetch("/api/journal", { headers })
+      .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? "Unable to load your journal"); return data; })
+      .then(data => { if (!active) return; setEntries(data.entries ?? []); })
+      .catch(() => undefined)
+      .finally(() => { if (active) setLoadingList(false); });
+    return () => { active = false; };
+  }, [headers, listKey]);
+
+  const dirty = body.trim() !== (saved?.body ?? "");
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(""); setNotice("");
+    const response = await fetch("/api/journal", {
+      method: "PUT", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ entryOn: date, body }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { setError(result.error ?? "Unable to save that entry"); setBusy(false); return; }
+    setSaved(result.entry); setBody(result.entry.body); setNotice("Saved.");
+    setListKey(current => current + 1); setBusy(false);
+  }
+
+  async function remove() {
+    if (!saved) return;
+    const response = await fetch(`/api/journal?id=${saved.id}`, { method: "DELETE", headers });
+    if (!response.ok) { setError("Unable to remove that entry"); return; }
+    setSaved(null); setBody(""); setNotice("Entry removed."); setListKey(current => current + 1);
+  }
+
+  const others = entries.filter(entry => entry.entryOn !== date);
+
+  return <section className="journal-page">
+    <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Daily journal</h2></div><span>{entries.length} {entries.length === 1 ? "day" : "days"}</span></div>
+    <p className="page-help">One entry per day for how the day went. Write it yourself for now — the assisted recap will fill this in later.</p>
+
+    <section className="date-nav" aria-label="Choose journal date">
+      <button type="button" onClick={() => setDate(addDays(date, -1))} aria-label="Previous day">‹</button>
+      <button type="button" className="date-button" onClick={() => setDate(localDate())}>
+        <strong>{date === localDate() ? "Today" : weekdayLabel(date)}</strong>
+        <span>{longDate(date)}</span>
+      </button>
+      <button type="button" onClick={() => setDate(addDays(date, 1))} aria-label="Next day">›</button>
+    </section>
+
+    {error && <p className="form-error">{error}</p>}
+    {loadingDay ? <div className="empty-state">Loading that day…</div> : <form className="food-form journal-form" onSubmit={save}>
+      <label className="journal-field">How did the day go?
+        <textarea className="meal-textarea" value={body} maxLength={8000} placeholder="Meals, movement, energy, sleep, how you felt about the day…"
+          onChange={event => { setBody(event.target.value); setNotice(""); }} />
+      </label>
+      <div className="journal-meta">
+        <small>{body.length} of 8000 characters</small>
+        {saved && <small>Last saved {new Date(saved.updatedAt).toLocaleString()}</small>}
+      </div>
+      {notice && <p className="journal-notice">{notice}</p>}
+      <div className="scanner-actions">
+        {saved
+          ? <button type="button" className="secondary" onClick={() => void remove()}>Delete entry</button>
+          : <button type="button" className="secondary" onClick={() => { setBody(""); setNotice(""); }} disabled={body === ""}>Clear</button>}
+        <button type="submit" className="primary" disabled={busy || !body.trim() || !dirty}>{busy ? "Saving…" : saved ? "Update entry" : "Save entry"}</button>
+      </div>
+    </form>}
+
+    <div className="section-heading journal-recent"><div><p className="eyebrow">Earlier days</p><h2>Recent entries</h2></div></div>
+    {loadingList ? <div className="empty-state">Loading earlier entries…</div>
+      : others.length === 0 ? <div className="empty-state">Nothing written on other days yet.</div>
+      : <div className="journal-list">{others.map(entry => <button type="button" className="journal-card" key={entry.id} onClick={() => setDate(entry.entryOn)}>
+          <strong>{weekdayLabel(entry.entryOn)} {shortDate(entry.entryOn)}</strong>
+          <span>{entry.body.length > 160 ? `${entry.body.slice(0, 160)}…` : entry.body}</span>
+        </button>)}</div>}
   </section>;
 }
 

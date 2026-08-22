@@ -89,7 +89,7 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 
 /* Section navigation */
-.view-nav{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:0 0 18px;padding:5px;border:1px solid #e4e0d6;border-radius:16px;background:rgba(255,253,249,.9)}
+.view-nav{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin:0 0 18px;padding:5px;border:1px solid #e4e0d6;border-radius:16px;background:rgba(255,253,249,.9)}
 .view-nav button{padding:10px 4px;border:0;border-radius:12px;background:transparent;color:var(--muted);font-size:12px;font-weight:800;white-space:nowrap;cursor:pointer}
 .view-nav button:hover{color:var(--sage-dark)}
 .view-nav button.active{background:var(--ink);color:white}
@@ -291,3 +291,37 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .source-summary strong{color:var(--ink);font-size:13px}
 .source-summary span{color:var(--muted);font-size:11px}
 @media(max-width:430px){.method-tabs{grid-template-columns:repeat(auto-fit,minmax(52px,1fr))}.method-tabs button{font-size:10px;padding:9px 2px}.add-step+.add-step{margin-top:16px;padding-top:15px}}
+
+/* Six sections no longer fit one row on a phone, so they wrap to two. */
+@media (min-width:600px){.view-nav{grid-template-columns:repeat(6,1fr)}}
+
+/* Weight log */
+.weight-page{padding-top:8px}
+.weight-form{margin-bottom:20px;padding:18px 16px;border:1px solid #e4e0d6;border-radius:20px;background:var(--card);box-shadow:0 7px 22px rgba(50,60,53,.055)}
+.weight-list{display:flex;flex-direction:column;gap:10px}
+.weight-row{display:flex;align-items:center;gap:12px;padding:15px 16px;border:1px solid #e2dfd5;border-radius:17px;background:var(--card);box-shadow:0 6px 18px rgba(50,60,53,.045)}
+.weight-main{display:flex;min-width:0;flex:1;flex-direction:column;gap:3px}
+.weight-main strong{font:600 20px Georgia,serif}
+.weight-main strong i{font:500 11px Arial,sans-serif;font-style:normal;color:var(--muted)}
+.weight-main span{color:var(--muted);font-size:11px}
+.weight-note{color:var(--sage-dark);font-size:11px}
+.weight-change{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex:0 0 auto;font-size:12px;font-weight:800;color:var(--muted)}
+.weight-change small{font-size:10px;font-weight:400}
+.weight-change.down{color:var(--sage-dark)}
+.weight-change.up{color:var(--coral)}
+.weight-actions{display:flex;flex:0 0 auto;gap:6px}
+.weight-actions button{width:34px;height:34px;border:1px solid #d5ded7;border-radius:10px;background:#f4f8f5;color:var(--sage-dark);font-size:13px;cursor:pointer}
+.weight-actions button:last-child{color:var(--coral)}
+
+/* Daily journal */
+.journal-page{padding-top:8px}
+.journal-form{margin-bottom:8px;padding:18px 16px;border:1px solid #e4e0d6;border-radius:20px;background:var(--card);box-shadow:0 7px 22px rgba(50,60,53,.055)}
+.journal-field .meal-textarea{min-height:190px;margin-top:7px}
+.journal-meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;margin:8px 0 4px;color:var(--muted);font-size:10px}
+.journal-notice{margin:4px 0 8px;color:var(--sage-dark);font-size:12px;font-weight:700}
+.journal-recent{margin-top:26px}
+.journal-list{display:flex;flex-direction:column;gap:10px}
+.journal-card{display:flex;flex-direction:column;gap:5px;padding:15px 16px;border:1px solid #e2dfd5;border-radius:17px;background:var(--card);text-align:left;cursor:pointer;box-shadow:0 6px 18px rgba(50,60,53,.045)}
+.journal-card:hover{border-color:var(--sage)}
+.journal-card strong{font-size:13px}
+.journal-card span{color:var(--muted);font-size:11px;line-height:1.5}

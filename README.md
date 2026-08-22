@@ -21,6 +21,9 @@ fat, total carbohydrates, fiber, and net carbohydrates.
 - Weekly Reports page for calories consumed and recorded movement
 - Calendar page colouring each day against the calorie goal that applied on
   that day
+- Weight log holding one reading per day, with an optional note and the
+  change from the previous reading
+- Daily journal holding one written entry per day
 - Automatic net-carb calculation
 - Date-by-date history
 - Per-user data ownership when authenticated user headers are available
@@ -29,7 +32,7 @@ fat, total carbohydrates, fiber, and net carbohydrates.
 
 ## Sections
 
-The application has three sections, selected from the navigation under the
+The application has six sections, selected from the navigation under the
 header:
 
 - **Diary** - the day's meals, macros, water, and exercise.
@@ -42,6 +45,15 @@ header:
   The range defaults to the last seven calendar days including today, and a
   custom start and end date can be chosen. Dates with no entries are listed
   with zero values.
+- **Weight** - the weight log. A reading is entered in pounds against a date,
+  with an optional note. Each date holds one reading, so re-weighing on a
+  date corrects it rather than adding a second row, and every entry can be
+  edited or removed. Readings are listed newest first with the change from
+  the previous reading.
+- **Journal** - one written entry per day for how the day went. The day is
+  chosen with the same date strip as the Diary, and earlier entries are
+  listed below for jumping back. Entries are written by hand today; the
+  planned chat recap will write them later.
 
 Goals and the three water shortcut amounts are edited from the gear icon and
 are stored separately for each profile.
@@ -196,14 +208,19 @@ uses the binding behavior configured in `vite.config.ts`.
 
 The schema is in `db/schema.ts`. Generated SQL migrations are in `drizzle/`.
 The `daily_goals` table holds one calorie goal per owner per day, which is
-what the Calendar grades against.
+what the Calendar grades against. The `weight_entries` and `journal_entries`
+tables each hold at most one row per owner per day, enforced by a unique index
+on the owner and the date.
 Food entries are assigned to the authenticated user's email, so two authenticated
 people receive separate diaries.
 
 ## Planned next phase
 
 - Dedicated drinks/beverages category
-- Weight-loss tracking
+- Chat-assisted daily recap that reads the day's food, water, movement, and
+  weight and writes the Journal entry. `journal_entries.source` already
+  records how an entry was written so assisted entries can be told apart.
+- Weight trend chart and goal weight
 - Nutrition-label photo scanning
 
 Do not place private USDA or AI API keys directly in source files. Keys belong
