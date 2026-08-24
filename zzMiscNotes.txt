@@ -1,0 +1,13 @@
+npx vite
+
+npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\AAAA.sql
+
+npm run deploy
+
+
+
+
+
+npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0006_weight_journal.sql
+npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0007_steps.sql
+npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0008_exercise_comments.sql

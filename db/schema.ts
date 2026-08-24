@@ -44,7 +44,7 @@ export const waterEntries = sqliteTable("water_entries", {
   drankOn: text("drank_on").notNull(),
   ounces: real("ounces").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+}, table => [index("water_entries_owner_date_idx").on(table.owner, table.drankOn)]);
 
 export const exerciseEntries = sqliteTable("exercise_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -53,6 +53,9 @@ export const exerciseEntries = sqliteTable("exercise_entries", {
   activity: text("activity").notNull(),
   minutes: real("minutes").notNull(),
   calories: real("calories").notNull().default(0),
+  // Optional free-text detail about the session. Entries made before this
+  // existed carry an empty string, exactly like `weightEntries.note`.
+  comments: text("comments").notNull().default(""),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, table => [index("exercise_entries_owner_date_idx").on(table.owner, table.exercisedOn)]);
 
@@ -73,3 +76,46 @@ export const customFoods = sqliteTable("custom_foods", {
   uniqueIndex("custom_foods_owner_name_serving_idx").on(table.owner, table.name, table.serving),
   uniqueIndex("custom_foods_owner_barcode_idx").on(table.owner, table.barcode).where(sql`${table.barcode} is not null`),
 ]);
+
+/**
+ * Weight log. One reading per owner per day so a corrected number replaces the
+ * old one instead of stacking up beside it.
+ */
+export const weightEntries = sqliteTable("weight_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  owner: text("owner").notNull(),
+  weighedOn: text("weighed_on").notNull(),
+  pounds: real("pounds").notNull(),
+  note: text("note").notNull().default(""),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, table => [uniqueIndex("weight_entries_owner_day_idx").on(table.owner, table.weighedOn)]);
+
+/**
+ * One journal entry per owner per day.
+ *
+ * `source` records how the text was written. Everything is "manual" today;
+ * the planned chat recap will write "assistant" without changing this shape.
+ */
+export const journalEntries = sqliteTable("journal_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  owner: text("owner").notNull(),
+  entryOn: text("entry_on").notNull(),
+  body: text("body").notNull(),
+  source: text("source").notNull().default("manual"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, table => [uniqueIndex("journal_entries_owner_day_idx").on(table.owner, table.entryOn)]);
+
+/**
+ * Manually entered step count. One total per owner per day, so re-entering a
+ * day's steps corrects it rather than stacking a second row beside it.
+ */
+export const stepEntries = sqliteTable("step_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  owner: text("owner").notNull(),
+  steppedOn: text("stepped_on").notNull(),
+  steps: integer("steps").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, table => [uniqueIndex("step_entries_owner_day_idx").on(table.owner, table.steppedOn)]);
