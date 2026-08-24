@@ -53,6 +53,9 @@ export const exerciseEntries = sqliteTable("exercise_entries", {
   activity: text("activity").notNull(),
   minutes: real("minutes").notNull(),
   calories: real("calories").notNull().default(0),
+  // Optional free-text detail about the session. Entries made before this
+  // existed carry an empty string, exactly like `weightEntries.note`.
+  comments: text("comments").notNull().default(""),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, table => [index("exercise_entries_owner_date_idx").on(table.owner, table.exercisedOn)]);
 

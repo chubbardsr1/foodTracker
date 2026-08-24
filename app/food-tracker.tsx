@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import ExportPanel from "./export-panel";
 import { exportSections as allExportSections } from "./export-shared";
 import {
-  type Profile, addDays, amount, localDate, longDate,
+  type Profile, addDays, amount, localDate, longDate, mediumDate,
   profileNames, round, shortDate, weekdayLabel, whole,
 } from "./shared";
 import WeightChart from "./weight-chart";
@@ -12,7 +12,9 @@ import WeightChart from "./weight-chart";
 type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
 type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
 type WaterEntry = { id: number; drankOn: string; ounces: number };
-type ExerciseEntry = { id: number; exercisedOn: string; activity: string; minutes: number; calories: number };
+type ExerciseEntry = { id: number; exercisedOn: string; activity: string; minutes: number; calories: number; comments: string };
+/** One activity within a day, as the Reports feed returns it. */
+type ActivitySession = { activity: string; minutes: number; calories: number; comments: string };
 type WeightEntry = { id: number; weighedOn: string; pounds: number; note: string };
 type StepEntry = { id: number; steppedOn: string; steps: number };
 type JournalEntry = { id: number; entryOn: string; body: string; source: string; updatedAt: string };
@@ -23,6 +25,13 @@ type Source = "manual" | "saved" | "usda" | "barcode" | "ai";
 type MealEstimate = {
   foodName: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number;
   assumptions: string[]; confidence: string; warnings: string[];
+};
+/** One piece of a described workout, with the MET the server calculated it from. */
+type ActivitySegment = { name: string; minutes: number; met: number; intensity: string; assumptions: string; calories: number };
+type ActivityEstimate = {
+  activityName: string; totalMinutes: number; totalCalories: number; comments: string;
+  segments: ActivitySegment[]; assumptions: string[]; confidence: string; warnings: string[];
+  weight: { pounds: number; weighedOn: string; fallback: boolean }; formula: string;
 };
 type ScannedProduct = {
   barcode: string; name: string; brand: string; serving: string; servingDescription: string;
@@ -38,7 +47,7 @@ type CalendarDay = {
   exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string;
   hasMovement: boolean; hasData: boolean;
 };
-type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string; steps: number | null };
+type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string; movement?: ActivitySession[]; steps: number | null };
 type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; steps: number; daysInRange: number; daysWithFood: number; daysWithExercise: number; daysWithSteps: number };
 type ReportAverages = { caloriesPerDay: number; caloriesPerLoggedDay: number; exerciseMinutesPerDay: number; stepsPerRecordedDay: number };
 
@@ -88,6 +97,9 @@ export default function FoodTracker() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customWaterOpen, setCustomWaterOpen] = useState(false);
   const [exerciseOpen, setExerciseOpen] = useState(false);
+  const [editingExercise, setEditingExercise] = useState<ExerciseEntry | null>(null);
+  // Bumped when My Foods changes, so an open Add Food form reloads its picker.
+  const [savedFoodsVersion, setSavedFoodsVersion] = useState(0);
   const [view, setView] = useState<View>("diary");
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [message, setMessage] = useState("");
@@ -163,7 +175,12 @@ export default function FoodTracker() {
       `Activity: ${round(exerciseMinutes)} minutes${exerciseCalories > 0 ? ` · ${Math.round(exerciseCalories)} calories burned` : ""}`,
     ];
     if (exercise.length === 0) lines.push("- Nothing logged");
-    else for (const item of exercise) lines.push(`- ${item.activity}: ${round(item.minutes)} min${item.calories > 0 ? `, ${Math.round(item.calories)} cal` : ""}`);
+    else for (const item of exercise) {
+      lines.push(`- ${item.activity}: ${round(item.minutes)} min${item.calories > 0 ? `, ${Math.round(item.calories)} cal` : ""}`);
+      // Comments are indented under their activity so a long gym note stays
+      // readable when the whole day is pasted somewhere else.
+      if (item.comments.trim()) for (const line of item.comments.split("\n")) lines.push(`  ${line}`);
+    }
     lines.push("", `Steps: ${steps ? whole(steps.steps) : "not recorded"}`);
     lines.push("", `Hydration: ${amount(waterTotal)} of ${goals.waterOunces} oz`);
     return lines.join("\n");
@@ -240,7 +257,7 @@ export default function FoodTracker() {
     </nav>
     {message && <button className="notice" onClick={() => setMessage("")}>{message} ×</button>}
 
-    {view === "foods" && <MyFoodsPage profile={profile} />}
+    {view === "foods" && <MyFoodsPage profile={profile} onFoodsChanged={() => setSavedFoodsVersion(current => current + 1)} />}
     {view === "calendar" && <CalendarPage profile={profile} onOpenDay={date => { setDate(date); setView("diary"); }} />}
     {view === "reports" && <ReportsPage profile={profile} />}
     {view === "weight" && <WeightPage profile={profile} />}
@@ -272,7 +289,15 @@ export default function FoodTracker() {
       <section className="exercise-card">
         <div className="exercise-heading"><div className="exercise-icon">↗</div><div><p className="eyebrow">Movement</p><h2>{round(exerciseMinutes)} <small>minutes</small></h2></div><button onClick={() => setExerciseOpen(true)}>+ Add exercise</button></div>
         <p className="exercise-summary">{exerciseCalories > 0 ? `${Math.round(exerciseCalories)} estimated calories burned` : exercise.length > 0 ? "Exercise logged for today" : "No exercise logged yet"}</p>
-        {exercise.length > 0 && <div className="exercise-history">{exercise.map(item => <div key={item.id}><span><strong>{item.activity}</strong><small>{round(item.minutes)} min{item.calories > 0 ? ` · ${Math.round(item.calories)} cal` : ""}</small></span><button onClick={() => void removeExercise(item.id)} aria-label={`Remove ${item.activity}`}>×</button></div>)}</div>}
+        {exercise.length > 0 && <div className="exercise-history">{exercise.map(item => <div key={item.id}>
+          <span>
+            <strong>{item.activity}</strong>
+            <small>{round(item.minutes)} min{item.calories > 0 ? ` · ${Math.round(item.calories)} cal` : ""}</small>
+            {item.comments.trim() && <ActivityComment text={item.comments} />}
+          </span>
+          <button onClick={() => setEditingExercise(item)} aria-label={`Edit ${item.activity}`}>✎</button>
+          <button onClick={() => void removeExercise(item.id)} aria-label={`Remove ${item.activity}`}>×</button>
+        </div>)}</div>}
       </section>
       <StepsCard key={`${profile}:${date}`} date={date} profile={profile} entry={steps}
         onSaved={entry => setSteps(entry)} onRemoved={() => setSteps(null)} onError={setMessage} />
@@ -298,10 +323,11 @@ export default function FoodTracker() {
       <button className="floating-add" onClick={() => setAddTarget({ meal: defaultMealForNow(), locked: false })}><span>＋</span> Add food</button>
     </>}
 
-    {addTarget && <AddFood meal={addTarget.meal} mealLocked={addTarget.locked} date={date} profile={profile} onClose={() => setAddTarget(null)} onSaved={(entry) => { setEntries(current => [...current, entry]); setAddTarget(null); }} />}
+    {addTarget && <AddFood meal={addTarget.meal} mealLocked={addTarget.locked} date={date} profile={profile} foodsVersion={savedFoodsVersion} onClose={() => setAddTarget(null)} onSaved={(entry) => { setEntries(current => [...current, entry]); setAddTarget(null); }} />}
     {settingsOpen && <SettingsEditor goals={goals} profile={profile} onClose={() => setSettingsOpen(false)} onSaved={(next) => { setGoals(next); setSettingsOpen(false); }} />}
     {customWaterOpen && <CustomWater onClose={() => setCustomWaterOpen(false)} onAdd={(ounces) => { void addWater(ounces); setCustomWaterOpen(false); }} />}
     {exerciseOpen && <AddExercise date={date} profile={profile} onClose={() => setExerciseOpen(false)} onSaved={(entry) => { setExercise(current => [...current, entry]); setExerciseOpen(false); }} />}
+    {editingExercise && <EditExercise entry={editingExercise} profile={profile} onClose={() => setEditingExercise(null)} onSaved={(entry) => { setExercise(current => current.map(item => item.id === entry.id ? entry : item)); setEditingExercise(null); }} />}
     {editingEntry && <EditDiaryEntry entry={editingEntry} profile={profile} onClose={() => setEditingEntry(null)} onSaved={(entry) => { setEntries(current => current.map(item => item.id === entry.id ? entry : item)); setEditingEntry(null); }} />}
   </main>;
 }
@@ -367,11 +393,13 @@ function StepsCard({ date, profile, entry, onSaved, onRemoved, onError }: {
   </section>;
 }
 
-function MyFoodsPage({ profile }: { profile: Profile }) {
+function MyFoodsPage({ profile, onFoodsChanged }: { profile: Profile; onFoodsChanged: () => void }) {
   const [foods, setFoods] = useState<Food[]>([]);
   const [editing, setEditing] = useState<Food | null>(null);
+  const [deleting, setDeleting] = useState<Food | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
   useEffect(() => {
     fetch("/api/custom-foods", { headers }).then(async response => {
@@ -380,13 +408,66 @@ function MyFoodsPage({ profile }: { profile: Profile }) {
       setFoods(data.foods ?? []);
     }).catch(reason => setError(reason instanceof Error ? reason.message : "Unable to load saved foods")).finally(() => setLoading(false));
   }, [headers]);
+
+  /**
+   * Drops one saved food. The row only leaves the screen once the server has
+   * confirmed it, so a failed delete leaves the list exactly as it was.
+   */
+  async function remove(food: Food) {
+    const response = await fetch(`/api/custom-foods?id=${food.id}`, { method: "DELETE", headers });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error((data as { error?: string }).error ?? "Unable to delete that saved food");
+    setFoods(current => current.filter(item => item.id !== food.id));
+    setDeleting(null);
+    setError("");
+    setNotice(`"${food.name}" was deleted. Diary entries made from it are unchanged.`);
+    onFoodsChanged();
+  }
   return <section className="saved-food-page">
     <div className="section-heading"><div><p className="eyebrow">Reusable entries</p><h2>Saved foods</h2></div><span>{foods.length} {foods.length === 1 ? "food" : "foods"}</span></div>
     <p className="page-help">Changes here apply the next time you use a saved food. Previous diary entries remain unchanged.</p>
     {error && <p className="form-error">{error}</p>}
-    {loading ? <div className="empty-state">Loading saved foods…</div> : foods.length === 0 ? <div className="empty-state">No saved foods yet.</div> : <div className="saved-food-list">{foods.map(food => <article className="saved-food-card" key={food.id}><div><strong>{food.name}</strong><span>{food.serving}</span><small>{round(food.calories)} cal · {round(food.protein)}g protein · {round(food.carbs - food.fiber)}g net carbs</small></div><button onClick={() => setEditing(food)}>Edit</button></article>)}</div>}
+    {notice && <p className="saved-food-notice" aria-live="polite">{notice}</p>}
+    {loading ? <div className="empty-state">Loading saved foods…</div> : foods.length === 0 ? <div className="empty-state">No saved foods yet.</div> : <div className="saved-food-list">{foods.map(food => <article className="saved-food-card" key={food.id}>
+      <div><strong>{food.name}</strong><span>{food.serving}</span><small>{round(food.calories)} cal · {round(food.protein)}g protein · {round(food.carbs - food.fiber)}g net carbs</small></div>
+      <div className="saved-food-actions">
+        <button type="button" onClick={() => { setNotice(""); setEditing(food); }}>Edit</button>
+        <button type="button" className="danger" onClick={() => { setNotice(""); setDeleting(food); }} aria-label={`Delete ${food.name}`}>Delete</button>
+      </div>
+    </article>)}</div>}
     {editing && <EditSavedFood food={editing} profile={profile} onClose={() => setEditing(null)} onSaved={(food) => { setFoods(current => current.map(item => item.id === food.id ? food : item)); setEditing(null); }} />}
+    {deleting && <ConfirmDeleteFood food={deleting} onClose={() => setDeleting(null)} onConfirm={remove} />}
   </section>;
+}
+
+/**
+ * Names the food before it goes, because a saved food and a diary entry look
+ * alike in a list and only one of them is being removed here.
+ */
+function ConfirmDeleteFood({ food, onClose, onConfirm }: { food: Food; onClose: () => void; onConfirm: (food: Food) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function confirm() {
+    setBusy(true); setError("");
+    try {
+      await onConfirm(food);
+    } catch (reason) {
+      // The food stays on screen and the dialog stays open, so a failure can
+      // be read and retried instead of looking like a silent success.
+      setError(reason instanceof Error ? reason.message : "Unable to delete that saved food");
+      setBusy(false);
+    }
+  }
+  return <div className="modal-backdrop" onMouseDown={busy ? undefined : onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="delete-food-title">
+    <div className="modal-head"><div><p className="eyebrow">Saved foods</p><h2 id="delete-food-title">Delete this food?</h2></div><button onClick={onClose} disabled={busy} aria-label="Close">×</button></div>
+    <p className="confirm-target"><strong>{food.name}</strong><span>{food.serving} · {round(food.calories)} cal</span></p>
+    <p className="confirm-help">This removes it from My Foods only. Diary entries already made from it keep their own name, serving, and nutrition. {food.barcode ? "Its barcode becomes free to save against another food." : ""}</p>
+    {error && <p className="form-error">{error}</p>}
+    <div className="scanner-actions">
+      <button type="button" className="secondary" onClick={onClose} disabled={busy}>Cancel</button>
+      <button type="button" className="primary danger" onClick={() => void confirm()} disabled={busy}>{busy ? "Deleting…" : "Delete food"}</button>
+    </div>
+  </div></div>;
 }
 
 function CalendarPage({ profile, onOpenDay }: { profile: Profile; onOpenDay: (date: string) => void }) {
@@ -592,6 +673,19 @@ function ReportsPage({ profile }: { profile: Profile }) {
             <tr><th scope="row">Daily average</th><td>{amount(averages?.caloriesPerDay ?? 0)}</td><td>{amount(averages?.exerciseMinutesPerDay ?? 0)}</td><td>{amount(Math.round((totals?.exerciseCalories ?? 0) / days.length * 100) / 100)}</td><td>{whole(averages?.stepsPerRecordedDay ?? 0)}</td></tr></tfoot>
         </table>
       </div>
+
+      {days.some(day => (day.movement ?? []).length > 0) && <div className="report-movement">
+        <h3>Movement log</h3>
+        <p className="page-help">Each recorded activity in this range, with the comments saved against it.</p>
+        {days.filter(day => (day.movement ?? []).length > 0).map(day => <div className="report-movement-day" key={day.date}>
+          <p className="report-movement-date">{weekdayLabel(day.date)} {shortDate(day.date)}</p>
+          {(day.movement ?? []).map((item, index) => <div className="report-movement-row" key={index}>
+            <strong>{item.activity}</strong>
+            <span>{amount(item.minutes)} min{item.calories > 0 ? ` · ${amount(item.calories)} cal` : ""}</span>
+            {item.comments.trim() && <p>{item.comments}</p>}
+          </div>)}
+        </div>)}
+      </div>}
     </>}
   </section>;
 }
@@ -1047,7 +1141,7 @@ const sourceSummaries: Record<Source, string> = {
   ai: "AI estimate — check it before saving",
 };
 
-function AddFood({ meal, mealLocked, date, profile, onClose, onSaved }: { meal: Meal; mealLocked: boolean; date: string; profile: Profile; onClose: () => void; onSaved: (entry: Entry) => void }) {
+function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSaved }: { meal: Meal; mealLocked: boolean; date: string; profile: Profile; foodsVersion: number; onClose: () => void; onSaved: (entry: Entry) => void }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [mealChoice, setMealChoice] = useState<Meal>(meal);
   const [method, setMethod] = useState<Method>("saved");
@@ -1069,7 +1163,17 @@ function AddFood({ meal, mealLocked, date, profile, onClose, onSaved }: { meal: 
   const [estimate, setEstimate] = useState<MealEstimate | null>(null);
   const [aiNotice, setAiNotice] = useState("");
   const headers = { "x-food-tracker-profile": profile };
-  useEffect(() => { fetch("/api/custom-foods", { headers }).then(response => response.json()).then(data => setMyFoods(data.foods ?? [])).catch(() => undefined); }, [profile]);
+  useEffect(() => {
+    fetch("/api/custom-foods", { headers }).then(response => response.json()).then(data => {
+      const saved: Food[] = data.foods ?? [];
+      setMyFoods(saved);
+      // A food deleted from My Foods must not stay linked here. Anything
+      // already typed into the form is left alone; only the link is dropped,
+      // so the entry still saves and can be saved to My Foods again.
+      setSavedId(current => current !== null && !saved.some(food => food.id === current) ? null : current);
+      setDuplicate(current => current !== null && !saved.some(food => food.id === current.id) ? null : current);
+    }).catch(() => undefined);
+  }, [profile, foodsVersion]);
 
   /** Clears whatever produced the previous prefill so only one source is ever shown. */
   function resetSources() { setScanned(null); setBarcodeNotice(""); setDuplicate(null); setEstimate(null); setAiNotice(""); }
@@ -1299,18 +1403,208 @@ function CustomWater({ onClose, onAdd }: { onClose: () => void; onAdd: (ounces: 
   return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Hydration</p><h2>Add water</h2></div><button onClick={onClose}>×</button></div><form className="food-form" onSubmit={submit}><label>Number of ounces<input name="ounces" type="number" min="0.01" max="256" step="0.01" required autoFocus /></label><button className="primary">Add water</button></form></div></div>;
 }
 
+const MAX_ACTIVITY_DESCRIPTION = 2000;
+const MAX_ACTIVITY_COMMENTS = 2000;
+const MAX_ACTIVITY_MINUTES = 1440;
+const MAX_ACTIVITY_CALORIES = 10000;
+
+/**
+ * An activity's comments in the day's list.
+ *
+ * A dictated gym write-up can run for a paragraph, so anything long is clamped
+ * to a couple of lines until it is opened. That keeps the daily summary short
+ * without hiding what was written.
+ */
+function ActivityComment({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 130 || text.includes("\n");
+  if (!long) return <p className="activity-comment">{text}</p>;
+  return <>
+    <p className={open ? "activity-comment" : "activity-comment clamped"}>{text}</p>
+    <button type="button" className="activity-comment-toggle" onClick={() => setOpen(current => !current)}>
+      {open ? "Show less" : "Show more"}
+    </button>
+  </>;
+}
+
+/** The shared name, minutes, calories, and comments fields of an activity. */
+function ActivityFields({ draft }: { draft: { activity: string; minutes: string; calories: string; comments: string } }) {
+  return <>
+    <label>Activity<input name="activity" placeholder="e.g. Walking" maxLength={100} required defaultValue={draft.activity} /></label>
+    <div className="form-grid">
+      <label>Minutes<input name="minutes" type="number" min="1" max={MAX_ACTIVITY_MINUTES} step="1" required defaultValue={draft.minutes} /></label>
+      <label>Calories burned (optional)<input name="calories" type="number" min="0" max={MAX_ACTIVITY_CALORIES} step="1" defaultValue={draft.calories} /></label>
+    </div>
+    <label className="activity-comments-field">Comments (optional)
+      <textarea name="comments" className="meal-textarea activity-textarea" rows={4} maxLength={MAX_ACTIVITY_COMMENTS} defaultValue={draft.comments}
+        placeholder="Sets, reps, distances, how it felt — anything worth remembering." />
+      <small>Up to {MAX_ACTIVITY_COMMENTS} characters. Tap the microphone on your iPhone keyboard to dictate this.</small>
+    </label>
+  </>;
+}
+
+/** Everything the assistant proposed, shown for review before anything is saved. */
+function ActivityEstimateCard({ estimate, onDismiss }: { estimate: ActivityEstimate; onDismiss: () => void }) {
+  return <div className="ai-card">
+    <div className="ai-head"><span aria-hidden="true">✧</span><div><strong>AI estimate — review before saving</strong><p>Nothing has been added to your diary. Check the name, minutes, calories, and comments below and edit anything that looks wrong.</p></div></div>
+    <dl className="product-meta">
+      <div><dt>Active minutes</dt><dd>{amount(estimate.totalMinutes)} min</dd></div>
+      <div><dt>Calories burned</dt><dd>{amount(estimate.totalCalories)}</dd></div>
+      <div><dt>Confidence</dt><dd className={estimate.confidence === "low" ? "flagged" : ""}>{estimate.confidence}</dd></div>
+      <div><dt>Body weight used</dt><dd className={estimate.weight.fallback ? "flagged" : ""}>{amount(estimate.weight.pounds)} lb</dd></div>
+    </dl>
+    <p className="ai-weight">
+      Estimated using a body weight of {amount(estimate.weight.pounds)} lb, recorded {mediumDate(estimate.weight.weighedOn)}.
+      {estimate.weight.fallback ? " That is your earliest reading, because nothing was logged on or before this date." : ""}
+    </p>
+    <div className="ai-list">
+      <p className="ai-list-title">Segments used</p>
+      <ul className="activity-segments">
+        {estimate.segments.map((segment, index) => <li key={index}>
+          <strong>{segment.name}</strong>
+          <span>{amount(segment.minutes)} min · {segment.intensity} · MET {amount(segment.met)} · {amount(segment.calories)} cal</span>
+          {segment.assumptions && <em>{segment.assumptions}</em>}
+        </li>)}
+      </ul>
+    </div>
+    {estimate.assumptions.length > 0 && <div className="ai-list"><p className="ai-list-title">Assumptions</p><ul>{estimate.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
+    {estimate.warnings.length > 0 && <div className="ai-list warnings"><p className="ai-list-title">Warnings</p><ul>{estimate.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
+    <p className="ai-tip">Calories are worked out here from {estimate.formula}, not taken from the assistant. Change the minutes or calories below if you know better.</p>
+    <button type="button" className="ai-dismiss" onClick={onDismiss}>Dismiss this estimate</button>
+  </div>;
+}
+
+const emptyActivityDraft = { activity: "", minutes: "", calories: "", comments: "" };
+
+/**
+ * Adds one activity, either typed in by hand or started from a described
+ * workout that Gemini breaks into segments.
+ *
+ * The estimate only fills the form in. Saving is always a separate, deliberate
+ * step, and the whole form keeps working if the assistant is unavailable.
+ */
 function AddExercise({ date, profile, onClose, onSaved }: { date: string; profile: Profile; onClose: () => void; onSaved: (entry: ExerciseEntry) => void }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const [description, setDescription] = useState("");
+  const [estimating, setEstimating] = useState(false);
+  const [estimate, setEstimate] = useState<ActivityEstimate | null>(null);
+  const [aiNotice, setAiNotice] = useState("");
+  const [draft, setDraft] = useState(emptyActivityDraft);
+  // Bumped whenever an estimate arrives so the uncontrolled form remounts.
+  const [draftKey, setDraftKey] = useState(0);
+  const headers = { "x-food-tracker-profile": profile };
+
+  /** Asks the server for an estimate and prefills the form. Nothing is saved. */
+  async function estimateActivity() {
+    const text = description.trim();
+    if (!text) { setAiNotice("Describe your activity first, then tap Estimate Activity."); return; }
+    setEstimating(true); setAiNotice(""); setEstimate(null); setError("");
+    try {
+      const response = await fetch("/api/estimate-activity", {
+        method: "POST", headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ description: text, exercisedOn: date }),
+      });
+      const data = await response.json() as { estimate?: ActivityEstimate; needsDetail?: boolean; needsWeight?: boolean; message?: string; error?: string };
+      if (data.estimate) {
+        const result = data.estimate;
+        setEstimate(result);
+        setDraft({
+          activity: result.activityName,
+          minutes: String(result.totalMinutes),
+          calories: String(Math.round(result.totalCalories)),
+          comments: result.comments,
+        });
+        setDraftKey(current => current + 1);
+      } else {
+        setAiNotice(data.message ?? data.error ?? "The activity assistant could not answer. Fill the activity in yourself.");
+      }
+    } catch {
+      // The description stays exactly as it was typed, so nothing dictated is lost.
+      setAiNotice("The activity assistant could not be reached. Fill the activity in yourself and it will still save.");
+    } finally {
+      setEstimating(false);
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError("");
     const form = new FormData(event.currentTarget);
+    const comments = String(form.get("comments") ?? "");
+    if (comments.trim().length > MAX_ACTIVITY_COMMENTS) {
+      setError(`Keep the comments to ${MAX_ACTIVITY_COMMENTS} characters or fewer`); setBusy(false); return;
+    }
     const response = await fetch("/api/exercise", {
-      method: "POST", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" },
-      body: JSON.stringify({ exercisedOn: date, activity: form.get("activity"), minutes: Number(form.get("minutes")), calories: Number(form.get("calories") || 0) }),
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ exercisedOn: date, activity: form.get("activity"), minutes: Number(form.get("minutes")), calories: Number(form.get("calories") || 0), comments }),
     });
     const result = await response.json();
     if (!response.ok) { setError(result.error ?? "Unable to add exercise"); setBusy(false); return; }
     onSaved(result.entry);
   }
-  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Movement</p><h2>Add exercise</h2></div><button onClick={onClose}>×</button></div><form className="food-form" onSubmit={submit}><label>Activity<input name="activity" placeholder="e.g. Walking" maxLength={100} required autoFocus /></label><div className="form-grid"><label>Minutes<input name="minutes" type="number" min="1" max="1440" step="1" required /></label><label>Calories burned (optional)<input name="calories" type="number" min="0" max="10000" step="1" /></label></div>{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Add exercise"}</button></form></div></div>;
+
+  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="activity-title">
+    <div className="modal-head"><div><p className="eyebrow">Movement</p><h2 id="activity-title">Add exercise</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
+
+    <section className="add-step">
+      <p className="step-label"><span aria-hidden="true">1</span> Describe it, or skip to step 2</p>
+      <label className="sr-label" htmlFor="activity-description">Describe your activity</label>
+      <textarea id="activity-description" className="meal-textarea" rows={5} maxLength={MAX_ACTIVITY_DESCRIPTION}
+        value={description} onChange={event => { setDescription(event.target.value); setAiNotice(""); }}
+        placeholder="Gym from 6:03 to 6:38. Treadmill warmup 10 minutes, 0.42 miles, incline 1. Bar squats with the empty bar, 4 sets of 6 to 8. Hammer Strength curls at 25 pounds, 5 sets of 10. Treadmill cooldown 8 minutes, incline 3." />
+      <div className="meal-assistant-row">
+        <small className="meal-hint">Tap the microphone on your iPhone keyboard to dictate this instead of typing.</small>
+        <button type="button" className="estimate-button" onClick={() => void estimateActivity()} disabled={estimating || description.trim().length === 0}>
+          {estimating ? "Estimating…" : "Estimate Activity"}
+        </button>
+      </div>
+      {estimating && <p className="meal-progress" role="status">Working out your segments… this usually takes a few seconds.</p>}
+      {aiNotice && <div className="barcode-notice"><span aria-hidden="true">⚠</span><div><strong>{aiNotice}</strong><p>Your description is still here. Edit it and try again, or fill the activity in below yourself.</p></div></div>}
+      {estimate && <ActivityEstimateCard estimate={estimate} onDismiss={() => { setEstimate(null); setDraft(emptyActivityDraft); setDraftKey(current => current + 1); }} />}
+    </section>
+
+    <section className="add-step">
+      <p className="step-label"><span aria-hidden="true">2</span> Review and add</p>
+      <p className={`source-summary${estimate ? " loaded" : ""}`}>
+        {estimate ? <><strong>{estimate.activityName}</strong><span>AI estimate — check it before saving</span></> : <span>Nothing loaded yet. Type the activity in below, or describe it above.</span>}
+      </p>
+      <form key={draftKey} className="food-form activity-form" onSubmit={submit}>
+        <ActivityFields draft={draft} />
+        {error && <p className="form-error">{error}</p>}
+        <button className="primary" disabled={busy}>{busy ? "Saving…" : "Add exercise"}</button>
+      </form>
+    </section>
+  </div></div>;
+}
+
+/**
+ * Corrects one saved activity, comments included.
+ *
+ * Every field is sent together, so editing the minutes keeps the comments and
+ * editing the comments keeps the minutes.
+ */
+function EditExercise({ entry, profile, onClose, onSaved }: { entry: ExerciseEntry; profile: Profile; onClose: () => void; onSaved: (entry: ExerciseEntry) => void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("");
+    const form = new FormData(event.currentTarget);
+    const comments = String(form.get("comments") ?? "");
+    if (comments.trim().length > MAX_ACTIVITY_COMMENTS) {
+      setError(`Keep the comments to ${MAX_ACTIVITY_COMMENTS} characters or fewer`); setBusy(false); return;
+    }
+    const response = await fetch("/api/exercise", {
+      method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" },
+      body: JSON.stringify({ id: entry.id, activity: form.get("activity"), minutes: Number(form.get("minutes")), calories: Number(form.get("calories") || 0), comments }),
+    });
+    const result = await response.json();
+    if (!response.ok) { setError(result.error ?? "Unable to update exercise"); setBusy(false); return; }
+    onSaved(result.entry);
+  }
+  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true">
+    <div className="modal-head"><div><p className="eyebrow">Movement</p><h2>Edit activity</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
+    <form className="food-form activity-form" onSubmit={submit}>
+      <ActivityFields draft={{ activity: entry.activity, minutes: String(entry.minutes), calories: String(entry.calories), comments: entry.comments }} />
+      {error && <p className="form-error">{error}</p>}
+      <button className="primary" disabled={busy}>{busy ? "Saving…" : "Save activity"}</button>
+    </form>
+  </div></div>;
 }

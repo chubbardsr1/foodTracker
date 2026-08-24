@@ -398,3 +398,48 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .export-filename{margin:10px 0 0;color:var(--muted);font-size:10px;line-height:1.45;word-break:break-all}
 .export-notice{margin:8px 0 0;color:var(--sage-dark);font-size:11.5px;font-weight:700;line-height:1.45}
 @media(max-width:430px){.export-actions{grid-template-columns:1fr}.export-presets button{flex:1 1 30%;font-size:10px;padding:9px 6px}}
+
+/* Activity comments and the Gemini activity assistant */
+.activity-comment{margin:2px 0 0;color:var(--muted);font-size:11px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+/* Long dictated notes stay two lines until they are opened, so one workout
+   never swallows the daily summary. */
+.activity-comment.clamped{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.exercise-history .activity-comment-toggle{align-self:flex-start;margin-top:3px;padding:0;border:0;background:transparent;color:var(--sage-dark);font-size:10px;font-weight:800;cursor:pointer}
+.exercise-history>div{gap:8px}
+.exercise-history>div>button{flex:0 0 auto;align-self:flex-start}
+.activity-comments-field{display:flex;flex-direction:column}
+.activity-comments-field small{margin-top:5px;color:var(--muted);font-size:10px;line-height:1.45}
+.activity-textarea{min-height:104px;margin-top:7px}
+.ai-weight{margin:0 0 11px;color:var(--sage-dark);font-size:11px;line-height:1.5}
+.activity-segments{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.activity-segments li{display:flex;flex-direction:column;gap:2px;padding:9px 11px;border:1px solid #e6dff1;border-radius:11px;background:white}
+.activity-segments strong{font-size:11.5px}
+.activity-segments span{color:var(--muted);font-size:10.5px;line-height:1.45}
+.activity-segments em{color:#6f6580;font-size:10.5px;font-style:normal;line-height:1.45}
+.ai-dismiss{width:100%;margin-top:11px;padding:11px;border:1px solid #ddd4ec;border-radius:12px;background:white;color:#6d5c88;font-size:11.5px;font-weight:800;cursor:pointer}
+
+/* Reports: what was actually done each day */
+.report-movement{margin-top:26px}
+.report-movement h3{font:600 16px Georgia,serif}
+.report-movement-day{margin-top:14px}
+.report-movement-date{margin:0 0 6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.report-movement-row{padding:12px 14px;border:1px solid #e2dfd5;border-radius:15px;background:var(--card);box-shadow:0 6px 18px rgba(50,60,53,.04)}
+.report-movement-row+.report-movement-row{margin-top:8px}
+.report-movement-row strong{display:block;font-size:13px}
+.report-movement-row>span{display:block;margin-top:2px;color:var(--muted);font-size:11px}
+.report-movement-row p{margin:7px 0 0;color:#4a574f;font-size:11.5px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+/* 16px keeps iOS Safari from zooming the page when an activity field is focused. */
+.activity-form input{font-size:16px}
+
+/* Deleting a saved food */
+.saved-food-actions{display:flex;flex:0 0 auto;gap:8px}
+.saved-food-card .saved-food-actions button{white-space:nowrap}
+.saved-food-card button.danger{border-color:#e8cfcb;background:#fdf3f1;color:var(--coral)}
+.saved-food-notice{margin:-8px 0 14px;color:var(--sage-dark);font-size:12px;font-weight:700;line-height:1.45}
+.confirm-target{display:flex;flex-direction:column;gap:3px;margin:0 0 10px;padding:13px 14px;border:1px solid #e2dfd5;border-radius:14px;background:#f8faf8}
+.confirm-target strong{font-size:14px;overflow-wrap:anywhere}
+.confirm-target span{color:var(--muted);font-size:11px}
+.confirm-help{margin:0 0 14px;color:var(--muted);font-size:11.5px;line-height:1.5}
+.primary.danger{background:var(--coral)}
+.scanner-actions button:disabled{opacity:.5;cursor:default}
+@media(max-width:430px){.saved-food-card{flex-wrap:wrap}.saved-food-actions{width:100%}.saved-food-actions button{flex:1 1 0}}

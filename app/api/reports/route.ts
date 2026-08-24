@@ -1,4 +1,4 @@
-import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { exerciseEntries, foodEntries, stepEntries } from "../../../db/schema";
 import { profileFrom } from "../profile";
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     if (dates.length > MAX_DAYS) return Response.json({ error: `Choose a range of ${MAX_DAYS} days or fewer` }, { status: 400 });
 
     const db = getDb(); const owner = profileFrom(request);
-    const [foodRows, exerciseRows, stepRows] = await Promise.all([
+    const [foodRows, exerciseRows, sessionRows, stepRows] = await Promise.all([
       db.select({
         date: foodEntries.eatenOn,
         calories: sql<number>`sum(${foodEntries.calories})`,
@@ -50,12 +50,26 @@ export async function GET(request: Request) {
       }).from(exerciseEntries)
         .where(and(eq(exerciseEntries.owner, owner), gte(exerciseEntries.exercisedOn, start), lte(exerciseEntries.exercisedOn, end)))
         .groupBy(exerciseEntries.exercisedOn),
+      // The individual sessions travel alongside the per-day rollup so the
+      // report can show what was actually done, comments included.
+      db.select({
+        id: exerciseEntries.id, date: exerciseEntries.exercisedOn, activity: exerciseEntries.activity,
+        minutes: exerciseEntries.minutes, calories: exerciseEntries.calories, comments: exerciseEntries.comments,
+      }).from(exerciseEntries)
+        .where(and(eq(exerciseEntries.owner, owner), gte(exerciseEntries.exercisedOn, start), lte(exerciseEntries.exercisedOn, end)))
+        .orderBy(asc(exerciseEntries.exercisedOn), asc(exerciseEntries.id)),
       db.select({ date: stepEntries.steppedOn, steps: stepEntries.steps }).from(stepEntries)
         .where(and(eq(stepEntries.owner, owner), gte(stepEntries.steppedOn, start), lte(stepEntries.steppedOn, end))),
     ]);
 
     const foodByDate = new Map(foodRows.map(row => [row.date, row]));
     const exerciseByDate = new Map(exerciseRows.map(row => [row.date, row]));
+    const sessionsByDate = new Map<string, { activity: string; minutes: number; calories: number; comments: string }[]>();
+    for (const row of sessionRows) {
+      const list = sessionsByDate.get(row.date) ?? [];
+      list.push({ activity: row.activity, minutes: roundTwo(row.minutes), calories: roundTwo(row.calories), comments: row.comments ?? "" });
+      sessionsByDate.set(row.date, list);
+    }
     // A day without a step entry reports null, so "not recorded" never reads as a zero-step day.
     const stepsByDate = new Map(stepRows.map(row => [row.date, row.steps]));
     const days = dates.map(date => {
@@ -69,6 +83,7 @@ export async function GET(request: Request) {
         items: Number(food?.items ?? 0),
         exerciseMinutes: roundTwo(movement?.minutes ?? 0), exerciseCalories: roundTwo(movement?.calories ?? 0),
         sessions: Number(movement?.sessions ?? 0), activities: movement?.activities ?? "",
+        movement: sessionsByDate.get(date) ?? [],
         steps: steps === undefined ? null : Number(steps),
       };
     });

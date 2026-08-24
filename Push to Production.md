@@ -29,11 +29,14 @@ Not yet applied to production - run these in order, oldest first:
   count, with a unique index on the owner and the date so a day can only
   ever hold one total, plus an owner-and-date index on water_entries for the
   export range queries)
+- 0008_exercise_comments.sql (comments column on exercise_entries for the
+  optional detailed activity notes; additive, existing rows pick up an empty
+  comment and keep every other value)
 
 # One-time secret setup - NOT part of a routine code push
 
-The meal assistant needs a Google Gemini API key stored as a Cloudflare
-secret. Run this once, and again only if the key is ever rotated. Wrangler
+The meal assistant and the activity assistant share one Google Gemini API key
+stored as a Cloudflare secret. Run this once, and again only if the key is ever rotated. Wrangler
 prompts for the value, so the key never appears in a command line or a file:
 
 npx wrangler secret put GEMINI_API_KEY --name food-tracker

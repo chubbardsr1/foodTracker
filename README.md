@@ -17,7 +17,10 @@ fat, total carbohydrates, fiber, and net carbohydrates.
 - Fractional servings that scale the recorded nutrition
 - Editable calorie and macro goals
 - Per-profile water shortcut buttons plus a custom-ounce option
-- Water and exercise tracking
+- Water and exercise tracking, with optional detailed comments on any
+  activity
+- Gemini activity assistant that turns a typed or dictated workout into
+  activity segments and a calorie estimate calculated from body weight
 - Manually entered daily step count, one total per person per day
 - Weekly Reports page for calories consumed and recorded movement
 - Calendar page colouring each day against the calorie goal that applied on
@@ -42,12 +45,16 @@ header:
 - **Diary** - the day's meals, macros, water, exercise, and steps. Steps are
   entered by hand as a whole number, one total per day, and can be corrected
   or removed.
-- **My Foods** - editing reusable saved foods. Editing a saved food never
-  changes diary entries that were already recorded.
+- **My Foods** - editing and deleting reusable saved foods. Editing or
+  deleting a saved food never changes diary entries that were already
+  recorded; each entry keeps its own nutrition snapshot. Deleting asks for
+  confirmation, names the food, and frees any barcode it held.
 - **Calendar** - a month at a glance. Each day is coloured by how its
   calories compared with that day's goal, with a dot showing whether any
   movement was recorded.
-- **Reports** - calories, movement, and steps recorded over a date range.
+- **Reports** - calories, movement, and steps recorded over a date range,
+  followed by a movement log listing each recorded activity with its
+  comments.
   The range defaults to the last seven calendar days including today, and a
   custom start and end date can be chosen. Dates with no entries are listed
   with zero values; a date with no step entry shows a dash rather than a
@@ -163,6 +170,51 @@ If Gemini cannot produce a usable estimate, the application says what is
 missing and keeps the description so it can be corrected. If Gemini is
 unavailable, slow, rate limited, or not configured, the rest of the Add Food
 form keeps working normally.
+
+## Activity assistant
+
+The Add Exercise form takes a typed or dictated description of a workout,
+such as "gym from 6:03 to 6:38, treadmill warmup 10 minutes, squats 4 sets of
+8, treadmill cooldown 8 minutes". Dictation uses the microphone on the iPhone
+keyboard; the application never asks for microphone access itself.
+
+The description is sent to `/api/estimate-activity`. Gemini splits it into
+activity segments and proposes a duration and a standard MET value for each
+one. It separates total elapsed time from active exercise time, keeps warmup,
+lifting, rest, and cooldown apart, and never counts the same minutes twice.
+The total minutes always equal the sum of the segments.
+
+Gemini never supplies the calorie total. Calories are calculated on the
+server for each segment with the standard formula:
+
+```text
+calories = MET x 3.5 x body weight in kg / 200 x minutes
+```
+
+The body weight is the selected profile's most recent weight entry on or
+before the activity date, falling back to their earliest recorded reading if
+the log started later. Chris's weight is never used for Sarah, or the other
+way round. If no weight has been recorded at all, the assistant asks for one
+before estimating. The weight used is shown with the estimate, for example
+"Estimated using a body weight of 294 lb". No copy of the weight is stored
+with the activity; the calorie figure saved on the entry is the historical
+value, so a later weigh-in never rewrites past activities.
+
+The proposal fills the activity name, minutes, calories, and comments in the
+normal form for review. Nothing is saved until Add exercise is tapped, and
+every field can be edited first. The estimate can be dismissed, and the whole
+form keeps working when Gemini is unavailable, slow, rate limited, or not
+configured.
+
+### Activity comments
+
+Any activity can carry optional detailed comments of up to 2,000 characters,
+validated in the browser and again on the server. Comments are shown under
+the activity in the Diary, clamped to two lines with a Show more control so
+one long note never swallows the daily summary. They appear in the copied
+daily recap, the Reports movement log, the PDF export under an "Activity
+notes" heading, and the JSON export as their own `comments` field. Activities
+recorded before comments existed stay valid with an empty comment.
 
 ### Gemini setup
 

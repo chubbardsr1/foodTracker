@@ -44,3 +44,31 @@ export async function PUT(request: Request) {
     return Response.json({ error: error instanceof Error ? error.message : "Unable to update saved food" }, { status: 500 });
   }
 }
+
+/**
+ * Removes one saved food.
+ *
+ * Only the saved food is touched. Diary entries keep their own nutrition
+ * snapshot, so history taken from this food is unaffected, and the barcode it
+ * held becomes free for a new saved food straight away.
+ *
+ * The owner comes from the request's profile, never from the body, so one
+ * profile can never delete the other's food. A second delete of the same id
+ * finds nothing and answers 404 without touching any other row.
+ */
+export async function DELETE(request: Request) {
+  try {
+    const raw = new URL(request.url).searchParams.get("id") ?? "";
+    const id = numberValue(raw);
+    if (!raw || !Number.isInteger(id) || id <= 0) {
+      return Response.json({ error: "A valid saved food is required" }, { status: 400 });
+    }
+    const [deleted] = await getDb().delete(customFoods)
+      .where(and(eq(customFoods.id, id), eq(customFoods.owner, profileFrom(request))))
+      .returning({ id: customFoods.id, name: customFoods.name });
+    if (!deleted) return Response.json({ error: "Saved food was not found" }, { status: 404 });
+    return Response.json({ deleted: true, id: deleted.id, name: deleted.name });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to delete saved food" }, { status: 500 });
+  }
+}

@@ -96,6 +96,7 @@ export async function GET(request: Request) {
         ? db.select({
             date: exerciseEntries.exercisedOn, activity: exerciseEntries.activity,
             minutes: exerciseEntries.minutes, caloriesBurned: exerciseEntries.calories,
+            comments: exerciseEntries.comments,
           }).from(exerciseEntries)
             .where(and(eq(exerciseEntries.owner, owner), gte(exerciseEntries.exercisedOn, start), lte(exerciseEntries.exercisedOn, end)))
             .orderBy(asc(exerciseEntries.exercisedOn), asc(exerciseEntries.id))
@@ -163,9 +164,11 @@ export async function GET(request: Request) {
     if (movement && wants("exerciseEntries")) {
       // Calories burned only travel with the movement log when the calories
       // section was chosen as well, so turning that section off really drops it.
+      // Comments are their own plain-text field and always travel with the
+      // movement log, so a note is never folded into the activity name.
       payload.exerciseEntries = movement.map(row => wants("exerciseCalories")
-        ? { date: row.date, activity: row.activity, minutes: roundTwo(row.minutes), caloriesBurned: roundTwo(row.caloriesBurned) }
-        : { date: row.date, activity: row.activity, minutes: roundTwo(row.minutes) });
+        ? { date: row.date, activity: row.activity, minutes: roundTwo(row.minutes), caloriesBurned: roundTwo(row.caloriesBurned), comments: row.comments ?? "" }
+        : { date: row.date, activity: row.activity, minutes: roundTwo(row.minutes), comments: row.comments ?? "" });
     }
     if (movement && wants("exerciseCalories")) {
       const byDate = new Map<string, { date: string; caloriesBurned: number; minutes: number; sessions: number }>();

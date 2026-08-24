@@ -39,7 +39,7 @@ export type ExportPayload = {
   dailySummaries?: { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; foodItems: number }[];
   foodEntries?: { date: string; meal: string; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number }[];
   waterEntries?: { date: string; ounces: number }[];
-  exerciseEntries?: { date: string; activity: string; minutes: number; caloriesBurned?: number }[];
+  exerciseEntries?: { date: string; activity: string; minutes: number; caloriesBurned?: number; comments?: string }[];
   exerciseCalories?: { date: string; caloriesBurned: number; minutes: number; sessions: number }[];
   steps?: { date: string; steps: number }[];
 };

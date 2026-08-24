@@ -290,6 +290,34 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
             ? [mediumDate(row.date), row.activity, amount(row.minutes), amount(row.caloriesBurned ?? 0)]
             : [mediumDate(row.date), row.activity, amount(row.minutes)]),
         );
+        // Comments are too long for a table cell, so they follow the table as
+        // wrapped paragraphs that break across pages on their own.
+        const noted = rows.filter(row => (row.comments ?? "").trim().length > 0);
+        if (noted.length > 0) {
+          ensure(46);
+          y += 4;
+          font(10, "bold", INK);
+          doc.text("Activity notes", MARGIN, y);
+          y += 15;
+          for (const row of noted) {
+            const heading = `${mediumDate(row.date)} - ${row.activity} - ${amount(row.minutes)} min`
+              + (withCalories ? ` - ${amount(row.caloriesBurned ?? 0)} cal` : "");
+            font(9, "normal", INK);
+            const lines = doc.splitTextToSize(pdfSafe(row.comments ?? ""), CONTENT_WIDTH - 10) as string[];
+            // Keep the heading with at least the first two lines of its note.
+            ensure(14 + Math.min(lines.length, 2) * 12.5 + 4);
+            font(9, "bold", INK);
+            doc.text(pdfSafe(heading), MARGIN, y);
+            y += 13;
+            font(9, "normal", MUTED);
+            for (const line of lines) {
+              if (y + 12.5 > BOTTOM) newPage();
+              doc.text(line, MARGIN + 10, y);
+              y += 12.5;
+            }
+            y += 7;
+          }
+        }
         break;
       }
       case "exerciseCalories": {

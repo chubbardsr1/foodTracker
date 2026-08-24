@@ -17,7 +17,7 @@
 | Lightweight security                        | Complete | Cloudflare Access permits only Chris’s and Sarah’s authorized email addresses.                                                                                 |
 | Water tracking                              | Complete | Separate water section with three shortcut buttons plus `+Other`. Each profile sets its own shortcut amounts in Settings, defaulting to 6, 8, and 12 ounces.   |
 | Drinks other than water                     | Partial  | Drinks containing calories can be entered as food, but there is no dedicated “Drinks” meal/category.                                                           |
-| Exercise tracking on the main screen        | Complete | Tracks activity, minutes, optional calories burned, daily history, and separate Chris/Sarah records.                                                           |
+| Exercise tracking on the main screen        | Complete | Tracks activity, minutes, optional calories burned, optional detailed comments, daily history, and separate Chris/Sarah records. A described workout can be estimated by Gemini and reviewed before saving.                                                           |
 | Put the site online                         | Complete | The application and D1 database are live on Cloudflare Workers.                                                                                                |
 | Restrict the live site to Chris and Sarah   | Complete | Cloudflare Access requires an email login code and allows only the two authorized email addresses.                                                             |
 
@@ -72,6 +72,18 @@
   are produced in the browser, with a Copy JSON button beside them. Only the
   selected profile's data is included, and no database ids or keys ever
   appear in the output.
+
+- Activity assistant: the Add Exercise form takes a typed or dictated
+  workout description and returns Gemini-identified activity segments, with
+  calories calculated on the server from the standard MET formula and the
+  profile's own most recent weight. The proposal fills the activity form for
+  review and is never saved automatically. Every activity can also carry
+  detailed comments, which appear in the diary, the copied recap, Reports,
+  and both exports.
+
+- My Foods: saved foods can be deleted as well as edited. Deleting asks for
+  confirmation by name, leaves historical diary entries untouched, and frees
+  the barcode for reuse.
 
 Future Ideas:
 Daily diary memo: One editable memo per user per date. It should not affect nutrition totals.
