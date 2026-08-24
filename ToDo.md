@@ -73,6 +73,17 @@
   selected profile's data is included, and no database ids or keys ever
   appear in the output.
 
+- Summary export: the Reports page adds a fourth button, Download Summary
+  PDF, that turns the same range and the same section choices into a concise
+  one-page document for a doctor rather than a list of every record. Each
+  category is averaged across its own recorded days - a date holding food,
+  water, an activity, or a step record - so a thirty-day range holding four
+  days of food reports the average calories across those four days and never
+  divides by thirty. A step count saved as zero counts as a recorded day; a
+  missing date does not. Weight is reported as the first and last reading in
+  the range with the change and a weekly rate. It is built in the browser
+  with the same jsPDF dependency and needs no AI or paid service.
+
 - Activity assistant: the Add Exercise form takes a typed or dictated
   workout description and returns Gemini-identified activity segments, with
   calories calculated on the server from the standard MET formula and the
@@ -94,7 +105,7 @@ Weekly summary: Seven-day averages for calories, protein, net carbs, fiber, wate
 Monthly waist measurement: Optional, but helpful when weight temporarily stalls.
 Milestones: Starting weight, current weight, total lost, next goal, and ultimate goal.
 A1C history: Date and result whenever tested, since lowering it is one of your main goals.
-Export: Done as PDF and JSON from the Weight, Journal, and Reports pages. CSV is still an option if a spreadsheet is ever wanted.
+Export: Done as PDF and JSON from the Weight, Journal, and Reports pages, plus a one-page doctor summary PDF from the Reports page. CSV is still an option if a spreadsheet is ever wanted.
 Target snapshot: Keep the goals used for each day so later goal changes do not rewrite past reports.
 
 The major unfinished pieces are:

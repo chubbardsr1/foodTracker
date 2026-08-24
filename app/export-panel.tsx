@@ -4,8 +4,9 @@ import { useState } from "react";
 import { type Profile, addDays, addMonths, localDate, mediumDate } from "./shared";
 import {
   type ExportSection, copyText, exportFileName, fetchExport, isEmptyExport,
-  saveBlob, sectionLabels,
+  saveBlob, sectionLabels, summaryFileName,
 } from "./export-shared";
+import { hasSummarySection } from "./export-summary";
 
 type Props = {
   profile: Profile;
@@ -17,9 +18,11 @@ type Props = {
   sections: ExportSection[];
   /** Oldest date this screen knows about, which turns on the "All recorded" preset. */
   earliest?: string | null;
+  /** Offers the concise doctor-friendly summary PDF beside the detailed exports. */
+  summary?: boolean;
 };
 
-type Job = "" | "pdf" | "json" | "copy";
+type Job = "" | "pdf" | "json" | "copy" | "summary";
 
 /**
  * The export centre, shared by the Weight, Journal, and Reports screens.
@@ -29,7 +32,7 @@ type Job = "" | "pdf" | "json" | "copy";
  * right. Dates are plain local calendar dates throughout and are handed to the
  * API as text, so nothing shifts a day when it crosses UTC midnight.
  */
-export default function ExportPanel({ profile, eyebrow, title, help, sections, earliest }: Props) {
+export default function ExportPanel({ profile, eyebrow, title, help, sections, earliest, summary = false }: Props) {
   const today = localDate();
   const [open, setOpen] = useState(false);
   const [start, setStart] = useState(addDays(today, -29));
@@ -42,6 +45,9 @@ export default function ExportPanel({ profile, eyebrow, title, help, sections, e
   const rangeInvalid = start > end;
   const nothingChosen = chosen.length === 0;
   const blocked = rangeInvalid || nothingChosen || busy !== "";
+  // Nutrition goals on their own are only a comparison column, so there would
+  // be nothing left for the summary to average.
+  const nothingToSummarise = !nothingChosen && !hasSummarySection(chosen);
 
   function toggle(section: ExportSection) {
     setNotice(""); setError("");
@@ -69,6 +75,15 @@ export default function ExportPanel({ profile, eyebrow, title, help, sections, e
         const { buildExportPdf } = await import("./export-pdf");
         const name = exportFileName(profile, start, end, "pdf");
         saveBlob(await buildExportPdf(data), name);
+        setNotice(`Saved ${name}`);
+        return;
+      }
+      if (job === "summary") {
+        // A separate, concise document built from the same payload. The
+        // detailed PDF above is untouched by it.
+        const { buildSummaryPdf } = await import("./export-summary-pdf");
+        const name = summaryFileName(profile, start, end);
+        saveBlob(await buildSummaryPdf(data), name);
         setNotice(`Saved ${name}`);
         return;
       }
@@ -123,14 +138,19 @@ export default function ExportPanel({ profile, eyebrow, title, help, sections, e
 
       {rangeInvalid && <p className="form-error">The start date must not be after the end date.</p>}
       {nothingChosen && !rangeInvalid && <p className="form-error">Choose at least one section to export.</p>}
+      {summary && nothingToSummarise && !rangeInvalid && <p className="form-error">The summary needs at least one section other than nutrition goals.</p>}
       {error && <p className="form-error">{error}</p>}
 
-      <div className="export-actions">
+      <div className={summary ? "export-actions four" : "export-actions"}>
         <button type="button" className="primary" disabled={blocked} onClick={() => void run("pdf")}>{busy === "pdf" ? "Building PDF…" : "Download PDF"}</button>
         <button type="button" className="secondary" disabled={blocked} onClick={() => void run("json")}>{busy === "json" ? "Building JSON…" : "Download JSON"}</button>
         <button type="button" className="secondary" disabled={blocked} onClick={() => void run("copy")}>{busy === "copy" ? "Copying…" : "Copy JSON"}</button>
+        {summary && <button type="button" className="secondary" disabled={blocked || nothingToSummarise} onClick={() => void run("summary")}>{busy === "summary" ? "Building summary…" : "Download Summary PDF"}</button>}
       </div>
-      <p className="export-filename">Files are named {exportFileName(profile, start, end, "pdf")}</p>
+      <p className="export-filename">
+        Files are named {exportFileName(profile, start, end, "pdf")}
+        {summary && <> and {summaryFileName(profile, start, end)}</>}
+      </p>
       {notice && <p className="export-notice" aria-live="polite">{notice}</p>}
     </div>}
   </section>;

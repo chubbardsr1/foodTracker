@@ -620,8 +620,8 @@ function ReportsPage({ profile }: { profile: Profile }) {
     <p className="page-help">Every date in the range is listed. Days without entries show zero, and a day with no step entry shows a dash rather than a zero.</p>
 
     <ExportPanel profile={profile} eyebrow="Export centre" title="Export everything"
-      help="A complete export of this profile. Pick a date range, keep or clear any section, then take it as a printable PDF or as JSON for an analysis tool."
-      sections={[...allExportSections]} />
+      help="A complete export of this profile. Pick a date range, keep or clear any section, then take it as a printable PDF or as JSON for an analysis tool. Download Summary PDF gives the same range as a one-page overview for a doctor, averaged over recorded days only."
+      sections={[...allExportSections]} summary />
 
     <div className="report-range">
       <label>Start<input type="date" value={start} max={end} onChange={event => setStart(event.target.value)} /></label>

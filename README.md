@@ -30,7 +30,8 @@ fat, total carbohydrates, fiber, and net carbohydrates.
   three, six month, and all-time ranges
 - Daily journal holding one written entry per day
 - Export centre on the Weight, Journal, and Reports pages producing a
-  printable PDF or a structured JSON file for a chosen date range
+  printable PDF or a structured JSON file for a chosen date range, plus a
+  concise one-page summary PDF for a doctor from the Reports page
 - Automatic net-carb calculation
 - Date-by-date history
 - Per-user data ownership when authenticated user headers are available
@@ -88,7 +89,7 @@ totals, individual food entries, water, exercise and movement, exercise
 calories, steps, and nutrition goals, including the calorie goal that was
 frozen onto each day in the range.
 
-Two formats are produced entirely in the browser:
+Three formats are produced entirely in the browser:
 
 - **PDF** - a printable document with the name, the date range, the creation
   date, each chosen section under its own heading, tables that repeat their
@@ -97,6 +98,7 @@ Two formats are produced entirely in the browser:
   Copy JSON button. Fields are named plainly, dates are ISO calendar dates,
   and nutrition values stay as numbers rather than formatted strings. No
   database ids, keys, or another profile's data are ever included.
+- **Summary PDF** - offered on the Reports page only. See below.
 
 Files are named after the profile and the range, for example
 `chris-health-export-2026-08-01-to-2026-08-31.pdf`.
@@ -105,6 +107,44 @@ An export only ever contains the currently selected profile's data. The
 start date must not be after the end date, at least one section must be
 chosen, and a range holding nothing shows a plain message instead of
 producing an empty file.
+
+### The summary PDF
+
+The Reports page carries a fourth button, **Download Summary PDF**, beside
+the three above. It uses the same profile, date range, and section
+checkboxes, and it is a separate document: the detailed PDF and the JSON are
+unchanged by it. Where the detailed PDF lists every row, the summary lists
+none of them. It gives headline figures a doctor can read in a minute -
+weight progress with a small trend chart, nutrition averages against the
+current goals, hydration, exercise, steps, journal participation, and a data
+coverage block - and it fits on one page in normal use, running onto a second
+only rather than shrinking the type. It is named
+`chris-health-summary-2026-07-26-to-2026-08-24.pdf`.
+
+**Averages cover recorded days only.** Each category counts its own recorded
+days and a missing date is never treated as a zero:
+
+- A **nutrition day** is a date holding at least one food diary entry.
+  Calories, protein, total carbs, fiber, net carbs, and fat are all divided
+  by that count. A thirty-day range holding four days of food reports
+  "Average calories: 1,963 across 4 recorded nutrition days", never
+  the same total divided by thirty.
+- A **hydration day** is a date holding at least one water entry. A date with
+  no water entry is unknown, not zero ounces.
+- A **step day** is a date holding a step record. A count saved as `0` is a
+  genuine recorded day and is counted; a date with no record at all is not.
+- An **exercise day** is a date holding at least one activity. Dates without
+  one are not treated as confirmed rest days. Exercise calories are reported
+  on their own and are never added to, or subtracted from, calories eaten.
+- **Weight** is event based rather than averaged: the earliest and latest
+  readings inside the range, both dates, the total change, and a weekly rate
+  once those two readings are at least a week apart. One reading or none is
+  said plainly instead of being shown as no change.
+
+Turning a section off omits that part of the summary rather than printing an
+empty heading, and turning off nutrition goals drops the goal column instead
+of leaving it blank. Nutrition goals on their own leave nothing to average,
+so the button is disabled until another section is ticked.
 
 Goals and the three water shortcut amounts are edited from the gear icon and
 are stored separately for each profile.

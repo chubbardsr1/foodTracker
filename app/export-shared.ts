@@ -49,6 +49,16 @@ export function exportFileName(profile: Profile, start: string, end: string, ext
   return `${profile}-health-export-${start}-to-${end}.${extension}`;
 }
 
+/**
+ * e.g. chris-health-summary-2026-07-26-to-2026-08-24.pdf
+ *
+ * Deliberately a different stem from the detailed export, so the concise
+ * summary and the full document never overwrite one another in Downloads.
+ */
+export function summaryFileName(profile: Profile, start: string, end: string) {
+  return `${profile}-health-summary-${start}-to-${end}.pdf`;
+}
+
 /** How many rows each chosen section actually holds, used for the "nothing here" message. */
 export function sectionCounts(data: ExportPayload) {
   const counts: Partial<Record<ExportSection, number>> = {};
