@@ -5,9 +5,12 @@ npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\AAAA.sql
 npm run deploy
 
 
+-- example of what is on prod for a table:
+npx wrangler d1 execute food-tracker-db --remote --command "PRAGMA table_info(food_entries);"
 
 
 
 npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0006_weight_journal.sql
 npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0007_steps.sql
 npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0008_exercise_comments.sql
+npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0009_fat_breakdown.sql

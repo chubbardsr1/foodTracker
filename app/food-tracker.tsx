@@ -1582,7 +1582,9 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
         <label>Servings eaten<input name="servings" type="number" min="0.01" max="100" step="0.01" required defaultValue="1.00" /><small>Use 0.50 for half a serving. Nutrition is adjusted automatically.</small></label>
         <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={selected?.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" required defaultValue={selected?.fiber} /></label></div>
         <FatFields key={`fat-${selectionKey}`} values={selected ?? {}} />
-        {savedId === null && <label className="checkbox-row"><input name="saveCustom" type="checkbox" defaultChecked={source !== "ai"} /><span>{source === "ai" ? "Save to My Foods" : "Save this to My Foods"}</span></label>}
+        {/* Always starts unticked, whatever the food came from, so a one-off
+            meal never quietly joins My Foods. */}
+        {savedId === null && <label className="checkbox-row"><input name="saveCustom" type="checkbox" /><span>{source === "ai" ? "Save to My Foods" : "Save this to My Foods"}</span></label>}
         {error && <p className="form-error">{error}</p>}
         <button className="primary" disabled={busy}>{busy ? "Saving…" : `Add to ${mealChoice}`}</button>
       </form>
