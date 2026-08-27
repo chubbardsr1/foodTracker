@@ -15,6 +15,9 @@
 import type { jsPDF } from "jspdf";
 import type { ExportPayload } from "./export-shared";
 import { type Summary, buildSummary, weightChangeWords } from "./export-summary";
+import {
+  UNKNOWN_FAT_LABEL, fatCoverageNote, fatDetailComplete, fatSubtypeKeys, fatSubtypeLabels, hasFatDetail,
+} from "./nutrition";
 import { amount, mediumDate, shortDate, whole } from "./shared";
 
 const PAGE_WIDTH = 612;
@@ -329,6 +332,20 @@ function writeSummary(summary: Summary, paint: Painter) {
         ["Net carbs", `${oneDecimal(nutrition.averages.netCarbs)} g`, goals ? `${amount(goals.netCarbs)} g` : "", days],
         ["Fat", `${oneDecimal(nutrition.averages.fat)} g`, goals ? `${amount(goals.fat)} g` : "", days],
       ];
+      // The fat breakdown sits directly under total fat. Total fat stays the
+      // primary figure; these four are never added up to replace it, and a
+      // subtype nothing recorded reads "Not available" rather than 0.0 g. The
+      // days cell shows how many of the recorded days actually carried it.
+      for (const key of fatSubtypeKeys) {
+        const average = nutrition.fatAverages[key];
+        rows.push([
+          `- ${fatSubtypeLabels[key]}`,
+          average === null ? UNKNOWN_FAT_LABEL : `${oneDecimal(average)} g`,
+          // No subtype has a goal, exactly as total carbs has none.
+          goals ? "no goal set" : "",
+          average === null ? "-" : `${nutrition.fatSubtypeDays[key]} of ${days}`,
+        ]);
+      }
       if (summary.show.goals) {
         // The goal column says whose target it is in its own header, so the
         // reader never has to guess whether it is current or historic.
@@ -362,6 +379,27 @@ function writeSummary(summary: Summary, paint: Painter) {
         `Averages cover the ${nutrition.recordedDays} ${nutrition.recordedDays === 1 ? "day" : "days"} holding at least one food entry, `
         + `not all ${summary.range.days} calendar days. Net carbs are total carbs less fiber.${goalNote}`,
       );
+      // Said plainly, because a partial subtype sum divided by every recorded
+      // day is a floor, not the patient's real intake.
+      const fatDetail = nutrition.fat;
+      if (!hasFatDetail(fatDetail)) {
+        paragraph(
+          "Fat breakdown: none of the food recorded in this range carries saturated, trans, monounsaturated, or "
+          + "polyunsaturated fat, so only total fat is available. These entries predate the breakdown rather than "
+          + "containing none.",
+        );
+      } else if (!fatDetailComplete(fatDetail)) {
+        paragraph(
+          `Fat breakdown: ${fatCoverageNote(fatDetail)} Each subtype average is divided by the same `
+          + `${nutrition.recordedDays} recorded ${nutrition.recordedDays === 1 ? "day" : "days"}, so where the record is `
+          + "incomplete it is a minimum rather than the full amount. Subtypes are not expected to add up to total fat.",
+        );
+      } else {
+        paragraph(
+          "Fat breakdown: every food entry in this range recorded all four subtypes. They are still not expected to add "
+          + "up to total fat, because labels round each line separately and some fat is not reported as any subtype.",
+        );
+      }
     }
   }
 

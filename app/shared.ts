@@ -20,6 +20,20 @@ export function addDays(date: string, days: number) {
   next.setDate(next.getDate() + days);
   return isoDate(next);
 }
+/**
+ * The last completed calendar day, which every automatic range ends on.
+ *
+ * Today is still in progress, so counting it understates every daily average
+ * and puts partial data into a document meant for a doctor. Reports presets,
+ * the export presets, and both PDFs all end here. A range typed in by hand is
+ * left alone and may still reach today.
+ */
+export function lastCompleteDate() { return addDays(localDate(), -1); }
+/** The `count` completed days ending yesterday, both ends included. */
+export function lastCompleteDays(count: number) {
+  const end = lastCompleteDate();
+  return { start: addDays(end, -(count - 1)), end };
+}
 /** The same calendar date a whole number of months earlier, clamped to a real day. */
 export function addMonths(date: string, months: number) {
   const from = new Date(`${date}T12:00:00`);

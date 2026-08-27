@@ -9,6 +9,11 @@ button { color:inherit; }
 .app-shell { width:min(100%,760px); min-height:100vh; margin:auto; padding:26px 22px 110px; }
 .topbar { display:flex; align-items:center; gap:12px; margin-bottom:25px; }
 .brand-mark { width:44px; height:44px; display:grid; place-items:center; border-radius:14px; background:var(--ink); color:white; font:700 23px Georgia,serif; }
+/* The logo and title reload the page, for when Safari holds on to a stale view.
+   The negative margin cancels the padding so the header does not shift. */
+.brand-refresh { display:flex; align-items:center; gap:12px; min-width:0; margin:-6px; padding:6px; border-radius:18px; cursor:pointer; transition:background-color .15s ease; }
+.brand-refresh:hover { background:rgba(115,150,133,.13); }
+.brand-refresh:focus-visible { outline:2px solid var(--sage-dark); outline-offset:1px; }
 h1,h2,h3,p { margin:0; }
 h1 { font:600 29px/1 Georgia,serif; }
 h2 { font:600 27px/1.1 Georgia,serif; }
@@ -72,8 +77,6 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .modal-head button { border:0; background:#eceeea; border-radius:50%; width:36px; height:36px; font-size:21px; cursor:pointer; }
 .coming-soon { display:flex; gap:11px; margin-bottom:18px; padding:13px; border-radius:15px; background:#eef3ef; }.coming-soon>span{color:var(--sage-dark)}.coming-soon strong{font-size:12px}.coming-soon p{margin-top:3px;color:var(--muted);font-size:11px;line-height:1.4}
 .food-form { display:flex; flex-direction:column; gap:14px; }
-.food-search { display:grid; grid-template-columns:1fr auto; gap:8px; margin-bottom:10px; }.food-search input{min-width:0;padding:12px 13px;border:1px solid #d9d6cd;border-radius:12px;background:white;outline:none}.food-search button{padding:0 15px;border:0;border-radius:12px;background:var(--sage-dark);color:white;font-weight:700;cursor:pointer}
-.search-results{display:flex;max-height:210px;overflow:auto;flex-direction:column;margin:0 0 12px;border:1px solid #e2ded3;border-radius:14px;background:white}.search-results button{display:flex;flex-direction:column;gap:4px;padding:11px 13px;border:0;border-bottom:1px solid #eeeae0;background:white;text-align:left;cursor:pointer}.search-results button:last-child{border-bottom:0}.search-results strong{font-size:12px}.search-results span{color:var(--muted);font-size:10px}
 .field-heading{display:block;margin:0 0 7px;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.field-heading.spaced{margin-top:18px}.field-help{display:block;margin-top:-4px;color:var(--muted);font-size:11px;line-height:1.45}
 .saved-food-page{padding-top:8px}.page-help{margin:-2px 0 18px;color:var(--muted);font-size:12px;line-height:1.5}.saved-food-list{display:flex;flex-direction:column;gap:10px}.saved-food-card{display:flex;align-items:center;gap:14px;padding:16px;border:1px solid #e2dfd5;border-radius:17px;background:var(--card);box-shadow:0 6px 18px rgba(50,60,53,.045)}.saved-food-card>div{display:flex;min-width:0;flex:1;flex-direction:column;gap:4px}.saved-food-card strong{font-size:14px}.saved-food-card span,.saved-food-card small{color:var(--muted);font-size:11px}.saved-food-card button{padding:8px 12px;border:1px solid #d5ded7;border-radius:10px;background:#f4f8f5;color:var(--sage-dark);font-size:11px;font-weight:800;cursor:pointer}
 .food-form label { display:flex; flex-direction:column; gap:6px; color:#4a574f; font-size:11px; font-weight:700; }
@@ -235,10 +238,13 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-bottom:14px}
 .calendar-weekday{padding-bottom:4px;color:var(--muted);font-size:10px;font-weight:800;text-align:center;letter-spacing:.06em}
 .calendar-blank{aspect-ratio:1}
-.calendar-day{position:relative;display:flex;aspect-ratio:1;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:2px;border:1px solid transparent;border-radius:11px;cursor:pointer;overflow:hidden}
-.calendar-date{font-size:11px;font-weight:800;line-height:1}
-.calendar-calories{font-size:10px;line-height:1.1;font-variant-numeric:tabular-nums;opacity:.85}
-.calendar-dot{width:6px;height:6px;margin-top:1px;border-radius:50%;background:#c9ccc8}
+.calendar-day{position:relative;display:flex;aspect-ratio:1;min-height:66px;flex-direction:column;align-items:center;justify-content:flex-start;gap:1px;padding:4px 0;border:1px solid transparent;border-radius:11px;cursor:pointer;overflow:hidden}
+/* A cell is only about a seventh of the screen wide, so the three totals are
+   sized against the viewport. "12,480 steps" has to fit a 42px phone cell. */
+.calendar-date{font-size:clamp(11px,2.6vw,13px);font-weight:800;line-height:1.05}
+.calendar-calories{font-size:clamp(7.2px,2.1vw,10px);font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.9}
+.calendar-metric{font-size:clamp(6.1px,1.85vw,9px);font-weight:600;line-height:1.15;letter-spacing:-.1px;font-variant-numeric:tabular-nums;white-space:nowrap;opacity:.7}
+.calendar-dot{width:6px;height:6px;margin-top:auto;border-radius:50%;background:#c9ccc8;flex:none}
 .calendar-dot.moved{background:var(--sage)}
 .calendar-day.is-empty .calendar-dot{opacity:0}
 .calendar-day.status-none{background:#f3f1ea;border-color:#e7e3d9;color:#9aa19b}
@@ -267,7 +273,8 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .day-detail-meta{margin-bottom:12px}
 .day-detail-activities{margin:0 0 12px;color:#4a574f;font-size:11px}
 .day-detail-note{margin:0 0 14px;padding:11px;border:1px solid #f0dfc6;border-radius:12px;background:#fdf6e9;color:#8f6414;font-size:11px;line-height:1.45}
-@media(max-width:430px){.calendar-grid{gap:4px}.calendar-date{font-size:10px}.calendar-calories{font-size:9px}.calendar-nav strong{font-size:17px}}
+@media(max-width:430px){.calendar-grid{gap:4px}.calendar-day{min-height:62px;padding:3px 0}.calendar-nav strong{font-size:17px}}
+@media(max-width:360px){.calendar-grid{gap:3px}}
 
 /* Add food: numbered steps and method tabs */
 .add-step{padding-top:4px}
@@ -283,8 +290,6 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .method-panel .saved-picker{margin-bottom:0}
 .method-panel .barcode-row{margin-bottom:0}
 .method-panel .barcode-row+.barcode-notice,.method-panel .barcode-row+.product-card{margin-top:12px}
-.method-panel .food-search{margin-bottom:0}
-.method-panel .food-search+.search-results{margin-top:12px}
 .sr-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .source-summary{display:flex;flex-direction:column;gap:3px;margin:0 0 14px;padding:12px 13px;border:1px dashed #ddd9cd;border-radius:13px;color:var(--muted);font-size:11px;line-height:1.45}
 .source-summary.loaded{border-style:solid;border-color:#cfe0d5;background:#f4f9f5}
@@ -448,3 +453,32 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .primary.danger{background:var(--coral)}
 .scanner-actions button:disabled{opacity:.5;cursor:default}
 @media(max-width:430px){.saved-food-card{flex-wrap:wrap}.saved-food-actions{width:100%}.saved-food-actions button{flex:1 1 0}}
+
+/* Fat breakdown: the dashboard card, its dialog, and the optional form fields */
+.macro-button{display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.macro-button:hover{border-color:var(--gold)}
+.macro-button:focus-visible{outline:2px solid var(--sage-dark);outline-offset:2px}
+.macro-more{display:block;margin-top:5px;color:var(--sage-dark);font-size:10px;font-weight:800;letter-spacing:.02em}
+.fat-detail-list{list-style:none;display:flex;flex-direction:column;gap:8px;margin:0 0 14px;padding:0}
+.fat-detail-list li{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:2px 10px;padding:11px 13px;border:1px solid #e7e4db;border-radius:13px;background:rgba(247,245,239,.7)}
+.fat-detail-list span{font-size:12.5px;font-weight:700}
+.fat-detail-list b{font:600 15px Georgia,serif;font-variant-numeric:tabular-nums;white-space:nowrap}
+.fat-detail-list b.unknown{color:var(--muted);font:600 12px Arial,sans-serif}
+.fat-detail-list small{grid-column:1/-1;color:var(--muted);font-size:10.5px;line-height:1.45}
+.fat-detail-help{margin:0;color:var(--muted);font-size:11.5px;line-height:1.5}
+.fat-fields{display:flex;flex-direction:column;gap:12px}
+.fat-fields-toggle{display:flex;width:100%;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px;border:1px solid #e2ded3;border-radius:12px;background:#f8f7f2;color:var(--ink);font-size:12px;font-weight:800;cursor:pointer}
+.fat-fields-toggle:hover{border-color:var(--sage)}
+.fat-fields-toggle small{margin-left:7px;color:var(--muted);font-size:10.5px;font-weight:600}
+.fat-fields-toggle>span:last-child{flex:0 0 auto;width:24px;height:24px;display:grid;place-items:center;border-radius:50%;background:#eef2ee;color:var(--sage-dark);font-size:15px}
+.fat-fields [hidden]{display:none}
+.ai-fat-list{list-style:none;display:flex;flex-direction:column;gap:5px;margin:6px 0 0;padding:0}
+.ai-fat-list li{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:7px 10px;border:1px solid #e6dff1;border-radius:10px;background:white}
+.ai-fat-list strong{font-size:11.5px}
+.ai-fat-list span{color:var(--ink);font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ai-fat-list span.unknown{color:var(--muted)}
+.ai-fat-note{margin:8px 0 0;color:var(--muted);font-size:10.5px;line-height:1.45}
+.report-fat{margin-top:26px}
+.report-fat h3{font:600 16px Georgia,serif;margin-bottom:6px}
+.report-fat .report-table td{font-variant-numeric:tabular-nums}
+.report-fat-note{margin-top:12px}

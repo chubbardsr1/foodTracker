@@ -5,6 +5,7 @@
  * a Cloudflare secret in production) and never reaches the browser. The meal
  * description is not logged anywhere.
  */
+import { coerceFatBreakdown, fatSubtypeLabels, fatSubtypesOverTotal } from "../../nutrition"
 import {
   askGemini, clean, cleanList, failureStatus, geminiKey,
   safeNumber, type GeminiFailure,
@@ -27,6 +28,12 @@ Rules:
 - Use commonly accepted nutrition values when exact product information is unavailable.
 - Put every meaningful assumption in "assumptions": leanness of ground beef, cooked versus raw weight, the size of a cheese slice, the size of a standard vegetable serving, any cooking fat you assumed, and similar.
 - "calories", "protein", "fat", "carbs" and "fiber" must be plain numbers for the whole meal as one serving: calories in kcal, the rest in grams. Never strings. Never negative. Never null.
+- "fat" is total fat and remains the primary fat figure.
+- "saturatedFat", "transFat", "monounsaturatedFat" and "polyunsaturatedFat" break that total fat down, in grams. Give a number only where you can reasonably determine it. Return null for any subtype you cannot. Never a string, never negative.
+- These four are not required to add up to "fat". Real labels omit subtypes and round each line separately, and some fat is not reported as any subtype. Never invent, pad, or adjust a subtype so the four reach the total, and never lower the total to match them.
+- Returning null is always better than guessing. A subtype you are confident is genuinely absent, such as trans fat in a plain vegetable, may be 0.
+- For homemade or restaurant food you may give reasonable subtype estimates from the ingredients, but never present a guess as a label value.
+- No single subtype may be larger than "fat".
 - Do not include sodium, sugar, cholesterol, or any other nutrient.
 - "foodName": a short useful name for the meal, at most 60 characters. Not a list of every ingredient.
 - "serving": a short phrase describing what one serving covers, such as "entire described meal".
@@ -43,6 +50,12 @@ const responseSchema = {
     calories: { type: "NUMBER" },
     protein: { type: "NUMBER" },
     fat: { type: "NUMBER" },
+    // Nullable on purpose: the model is told to answer null rather than guess,
+    // and null travels all the way through as "not available".
+    saturatedFat: { type: "NUMBER", nullable: true },
+    transFat: { type: "NUMBER", nullable: true },
+    monounsaturatedFat: { type: "NUMBER", nullable: true },
+    polyunsaturatedFat: { type: "NUMBER", nullable: true },
     carbs: { type: "NUMBER" },
     fiber: { type: "NUMBER" },
     assumptions: { type: "ARRAY", items: { type: "STRING" } },
@@ -56,6 +69,10 @@ const responseSchema = {
     "calories",
     "protein",
     "fat",
+    "saturatedFat",
+    "transFat",
+    "monounsaturatedFat",
+    "polyunsaturatedFat",
     "carbs",
     "fiber",
     "assumptions",
@@ -69,6 +86,10 @@ const responseSchema = {
     "calories",
     "protein",
     "fat",
+    "saturatedFat",
+    "transFat",
+    "monounsaturatedFat",
+    "polyunsaturatedFat",
     "carbs",
     "fiber",
     "assumptions",
@@ -164,7 +185,11 @@ export async function POST(request: Request) {
   }
   const foodName = clean(parsed.foodName, 80)
   // A missing or out-of-range value is never quietly turned into a zero.
-  if (!foodName || Object.values(numbers).some((value) => value === null)) {
+  if (
+    !foodName
+    || numbers.calories === null || numbers.protein === null || numbers.fat === null
+    || numbers.carbs === null || numbers.fiber === null
+  ) {
     return Response.json({
       needsDetail: true,
       message:
@@ -172,6 +197,20 @@ export async function POST(request: Request) {
       warnings,
     })
   }
+
+  // The four fat subtypes are optional. A field the model omitted, answered as
+  // null, or answered badly is left unknown rather than turned into a zero, so
+  // an answer without them is still a complete estimate.
+  const fatDetail = coerceFatBreakdown(parsed, GRAM_CAP)
+  // A subtype larger than total fat cannot be right. It is dropped back to
+  // unknown and called out, rather than refusing the whole estimate. The four
+  // are never adjusted to add up to the total.
+  const impossible = fatSubtypesOverTotal(numbers.fat, fatDetail)
+  for (const key of impossible) fatDetail[key] = null
+  const fatNotes = impossible.length === 0 ? [] : [
+    `${impossible.map((key) => fatSubtypeLabels[key]).join(", ")} came back higher than the total fat, so `
+    + `${impossible.length === 1 ? "it was" : "they were"} left blank. Fill in the real value if you have it.`,
+  ]
 
   const confidence = ["low", "medium", "high"].includes(String(parsed.confidence))
     ? String(parsed.confidence)
@@ -183,11 +222,12 @@ export async function POST(request: Request) {
       calories: numbers.calories,
       protein: numbers.protein,
       fat: numbers.fat,
+      ...fatDetail,
       carbs: numbers.carbs,
       fiber: numbers.fiber,
       assumptions: cleanList(parsed.assumptions, 8),
       confidence,
-      warnings,
+      warnings: [...warnings, ...fatNotes],
     },
     model: result.model,
   })

@@ -8,6 +8,14 @@ export const foodEntries = sqliteTable("food_entries", {
   calories: real("calories").notNull(), protein: real("protein").notNull(),
   fat: real("fat").notNull(), carbs: real("carbs").notNull(),
   fiber: real("fiber").notNull().default(0),
+  // Fat subtypes are deliberately nullable. Null means the label, product
+  // record, or estimate never gave a figure; 0 means a source really did say
+  // zero. Total fat above stays the primary value and is never derived from
+  // these, because labels omit subtypes and round each line on its own.
+  saturatedFat: real("saturated_fat"),
+  transFat: real("trans_fat"),
+  monounsaturatedFat: real("monounsaturated_fat"),
+  polyunsaturatedFat: real("polyunsaturated_fat"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, table => [index("food_entries_owner_date_idx").on(table.owner, table.eatenOn)]);
 
@@ -69,6 +77,13 @@ export const customFoods = sqliteTable("custom_foods", {
   fat: real("fat").notNull(),
   carbs: real("carbs").notNull(),
   fiber: real("fiber").notNull().default(0),
+  // Nullable for the same reason as on `foodEntries`: a saved food from before
+  // the breakdown existed holds unknown subtypes, not zeroes, until it is
+  // edited. Values here are for one full serving.
+  saturatedFat: real("saturated_fat"),
+  transFat: real("trans_fat"),
+  monounsaturatedFat: real("monounsaturated_fat"),
+  polyunsaturatedFat: real("polyunsaturated_fat"),
   // Set when the food came from a scanned product. Older saved foods stay null.
   barcode: text("barcode"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),

@@ -12,6 +12,7 @@ import {
   dailyGoals, exerciseEntries, foodEntries, journalEntries,
   nutritionGoals, stepEntries, waterEntries, weightEntries,
 } from "../../../db/schema";
+import { type FatSubtype, fatSubtypeKeys, fatTotalsFrom } from "../../nutrition";
 import { DEFAULT_CALORIE_GOAL } from "../daily-goal";
 import { profileFrom } from "../profile";
 
@@ -27,6 +28,9 @@ const MAX_DAYS = 1500;
 const isDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
 /** Nutrition is exported as a number with at most two decimals, never a formatted string. */
 const roundTwo = (value: unknown) => Math.round(Number(value ?? 0) * 100) / 100;
+/** Same rounding, but an absent value stays absent instead of becoming zero. */
+const optionalTwo = (value: unknown) =>
+  value === null || value === undefined || !Number.isFinite(Number(value)) ? null : roundTwo(value);
 
 /** Whole days between two calendar dates, counting both ends. */
 function daysBetween(start: string, end: string) {
@@ -73,6 +77,17 @@ export async function GET(request: Request) {
             calories: sql<number>`sum(${foodEntries.calories})`, protein: sql<number>`sum(${foodEntries.protein})`,
             fat: sql<number>`sum(${foodEntries.fat})`, carbs: sql<number>`sum(${foodEntries.carbs})`,
             fiber: sql<number>`sum(${foodEntries.fiber})`, foodItems: sql<number>`count(*)`,
+            // Each subtype totals only the entries that recorded it, alongside
+            // a count of those entries. sum() ignores nulls, so the count is
+            // what keeps an unrecorded subtype from reading as a zero.
+            saturatedFat: sql<number | null>`sum(${foodEntries.saturatedFat})`,
+            saturatedFatKnown: sql<number>`sum(case when ${foodEntries.saturatedFat} is null then 0 else 1 end)`,
+            transFat: sql<number | null>`sum(${foodEntries.transFat})`,
+            transFatKnown: sql<number>`sum(case when ${foodEntries.transFat} is null then 0 else 1 end)`,
+            monounsaturatedFat: sql<number | null>`sum(${foodEntries.monounsaturatedFat})`,
+            monounsaturatedFatKnown: sql<number>`sum(case when ${foodEntries.monounsaturatedFat} is null then 0 else 1 end)`,
+            polyunsaturatedFat: sql<number | null>`sum(${foodEntries.polyunsaturatedFat})`,
+            polyunsaturatedFatKnown: sql<number>`sum(case when ${foodEntries.polyunsaturatedFat} is null then 0 else 1 end)`,
           }).from(foodEntries)
             .where(and(eq(foodEntries.owner, owner), gte(foodEntries.eatenOn, start), lte(foodEntries.eatenOn, end)))
             .groupBy(foodEntries.eatenOn).orderBy(asc(foodEntries.eatenOn))
@@ -82,6 +97,8 @@ export async function GET(request: Request) {
             date: foodEntries.eatenOn, meal: foodEntries.meal, name: foodEntries.name, serving: foodEntries.serving,
             calories: foodEntries.calories, protein: foodEntries.protein, fat: foodEntries.fat,
             carbs: foodEntries.carbs, fiber: foodEntries.fiber,
+            saturatedFat: foodEntries.saturatedFat, transFat: foodEntries.transFat,
+            monounsaturatedFat: foodEntries.monounsaturatedFat, polyunsaturatedFat: foodEntries.polyunsaturatedFat,
           }).from(foodEntries)
             .where(and(eq(foodEntries.owner, owner), gte(foodEntries.eatenOn, start), lte(foodEntries.eatenOn, end)))
             .orderBy(asc(foodEntries.eatenOn), asc(foodEntries.id))
@@ -147,18 +164,31 @@ export async function GET(request: Request) {
     }
     if (weights) payload.weights = weights.map(row => ({ date: row.date, pounds: roundTwo(row.pounds), note: row.note }));
     if (journal) payload.journalEntries = journal.map(row => ({ date: row.date, body: row.body, source: row.source, updatedAt: row.updatedAt }));
-    if (summaries) payload.dailySummaries = summaries.map(row => ({
-      date: row.date,
-      calories: roundTwo(row.calories), protein: roundTwo(row.protein), fat: roundTwo(row.fat),
-      carbs: roundTwo(row.carbs), fiber: roundTwo(row.fiber),
-      netCarbs: Math.max(0, roundTwo(Number(row.carbs ?? 0) - Number(row.fiber ?? 0))),
-      foodItems: Number(row.foodItems ?? 0),
-    }));
+    if (summaries) payload.dailySummaries = summaries.map(row => {
+      // Null stays null through the JSON: a subtype nobody recorded is absent,
+      // not zero. `fatSubtypeEntries` says how many of the day's entries
+      // carried each value, so a partial sum can be read as partial.
+      const fat = fatTotalsFrom(row.fat, row.foodItems, row, {
+        saturatedFat: row.saturatedFatKnown, transFat: row.transFatKnown,
+        monounsaturatedFat: row.monounsaturatedFatKnown, polyunsaturatedFat: row.polyunsaturatedFatKnown,
+      });
+      return {
+        date: row.date,
+        calories: roundTwo(row.calories), protein: roundTwo(row.protein), fat: roundTwo(row.fat),
+        carbs: roundTwo(row.carbs), fiber: roundTwo(row.fiber),
+        netCarbs: Math.max(0, roundTwo(Number(row.carbs ?? 0) - Number(row.fiber ?? 0))),
+        foodItems: Number(row.foodItems ?? 0),
+        ...fat.subtotals,
+        fatSubtypeEntries: fat.known,
+      };
+    });
     if (foods) payload.foodEntries = foods.map(row => ({
       date: row.date, meal: row.meal, name: row.name, serving: row.serving,
       calories: roundTwo(row.calories), protein: roundTwo(row.protein), fat: roundTwo(row.fat),
       carbs: roundTwo(row.carbs), fiber: roundTwo(row.fiber),
       netCarbs: Math.max(0, roundTwo(Number(row.carbs) - Number(row.fiber))),
+      // An entry saved before the fat breakdown existed exports these as null.
+      ...Object.fromEntries(fatSubtypeKeys.map(key => [key, optionalTwo(row[key])])) as Record<FatSubtype, number | null>,
     }));
     if (water) payload.waterEntries = water.map(row => ({ date: row.date, ounces: roundTwo(row.ounces) }));
     if (movement && wants("exerciseEntries")) {

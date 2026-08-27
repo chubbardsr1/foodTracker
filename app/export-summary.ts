@@ -13,6 +13,10 @@
  * export feed already returns, so no new API, table, or migration is involved.
  */
 import type { ExportPayload, ExportSection } from "./export-shared";
+import {
+  type FatBreakdown, type FatSubtype, type FatTotals,
+  aggregateFat, emptyFatBreakdown, emptyFatTotals, fatSubtypeKeys, fatTotalsFrom, mergeFatTotals,
+} from "./nutrition";
 
 /** Calendar days since the epoch, read at local midday so no date shifts back. */
 function dayNumber(date: string) {
@@ -37,6 +41,12 @@ export function hasSummarySection(sections: ExportSection[]) {
 export type DailyNutrition = {
   date: string; calories: number; protein: number; fat: number;
   carbs: number; fiber: number; netCarbs: number; foodItems: number;
+  /**
+   * The day's fat rollup: total fat, the sum of each subtype that was actually
+   * recorded, and how many of the day's entries recorded it. Built by the one
+   * shared aggregation, so the dashboard, the reports, and both PDFs agree.
+   */
+  fatDetail: FatTotals;
 };
 
 export type NutritionSummary = {
@@ -45,6 +55,16 @@ export type NutritionSummary = {
   foodItems: number;
   totals: { calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number };
   averages: { calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number };
+  /** Fat subtype sums and coverage across the whole range. */
+  fat: FatTotals;
+  /**
+   * Each subtype per recorded day, on the same divisor as every other average
+   * here, or null where nothing recorded it. Where only some entries carried a
+   * subtype this is a floor, not the whole intake, which the PDFs say plainly.
+   */
+  fatAverages: FatBreakdown;
+  /** Recorded days holding at least one entry that carried each subtype. */
+  fatSubtypeDays: Record<FatSubtype, number>;
 };
 
 export type HydrationSummary = {
@@ -106,24 +126,36 @@ export type Summary = {
 };
 
 /** Per-date nutrition, taken from whichever nutrition section travelled with the export. */
-function dailyNutrition(data: ExportPayload): DailyNutrition[] {
+export function dailyNutrition(data: ExportPayload): DailyNutrition[] {
   // Daily totals are already grouped by the feed, so they are preferred and the
   // individual entries are ignored. Reading both would count every meal twice.
   const summaries = data.dailySummaries;
-  if (summaries) return summaries.map(row => ({ ...row }));
+  if (summaries) {
+    return summaries.map(row => ({
+      ...row,
+      // An export taken before the fat breakdown existed carries no counts, so
+      // every subtype reads as unknown rather than as a recorded zero.
+      fatDetail: fatTotalsFrom(row.fat, row.foodItems, row, row.fatSubtypeEntries ?? {}),
+    }));
+  }
 
   const byDate = new Map<string, DailyNutrition>();
+  const entriesByDate = new Map<string, NonNullable<ExportPayload["foodEntries"]>>();
   for (const row of data.foodEntries ?? []) {
     const day = byDate.get(row.date)
-      ?? { date: row.date, calories: 0, protein: 0, fat: 0, carbs: 0, fiber: 0, netCarbs: 0, foodItems: 0 };
+      ?? { date: row.date, calories: 0, protein: 0, fat: 0, carbs: 0, fiber: 0, netCarbs: 0, foodItems: 0, fatDetail: emptyFatTotals() };
     day.calories += row.calories; day.protein += row.protein; day.fat += row.fat;
     day.carbs += row.carbs; day.fiber += row.fiber; day.foodItems += 1;
     byDate.set(row.date, day);
+    const rows = entriesByDate.get(row.date) ?? [];
+    rows.push(row);
+    entriesByDate.set(row.date, rows);
   }
   for (const day of byDate.values()) {
     // Net carbs follow the rest of the app: total carbs less fiber, never below
     // zero, worked out once per day rather than per mouthful.
     day.netCarbs = Math.max(0, roundTwo(day.carbs - day.fiber));
+    day.fatDetail = aggregateFat(entriesByDate.get(day.date) ?? []);
   }
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -153,6 +185,15 @@ export function buildSummary(data: ExportPayload): Summary {
     // Divided by recorded nutrition days only. A date with no food entry stays
     // out of both the total and the divisor rather than counting as a zero day.
     const per = (value: number) => recordedDays === 0 ? 0 : value / recordedDays;
+    const fat = days.reduce<FatTotals>((sum, day) => mergeFatTotals(sum, day.fatDetail), emptyFatTotals());
+    const fatAverages = emptyFatBreakdown();
+    const fatSubtypeDays: Record<FatSubtype, number> = { saturatedFat: 0, transFat: 0, monounsaturatedFat: 0, polyunsaturatedFat: 0 };
+    for (const key of fatSubtypeKeys) {
+      const subtotal = fat.subtotals[key];
+      // Divided by the same recorded days as every other average on the page.
+      fatAverages[key] = subtotal === null ? null : per(subtotal);
+      fatSubtypeDays[key] = days.filter(day => day.fatDetail.known[key] > 0).length;
+    }
     nutrition = {
       recordedDays,
       foodItems: days.reduce((sum, day) => sum + day.foodItems, 0),
@@ -161,6 +202,7 @@ export function buildSummary(data: ExportPayload): Summary {
         calories: per(totals.calories), protein: per(totals.protein), fat: per(totals.fat),
         carbs: per(totals.carbs), fiber: per(totals.fiber), netCarbs: per(totals.netCarbs),
       },
+      fat, fatAverages, fatSubtypeDays,
     };
   }
 

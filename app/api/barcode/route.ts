@@ -7,6 +7,8 @@
  * the server so the browser only ever sees the normalized product.
  */
 
+import { type FatSubtype, fatSubtypeKeys } from "../../nutrition";
+
 const OFF_ENDPOINT = "https://world.openfoodfacts.org/api/v2/product";
 const USER_AGENT = "DailyFoodTracker/1.0 (private household food tracker; https://food-tracker.hubbard-foodtracker.workers.dev)";
 const ATTRIBUTION = "Product data from Open Food Facts, made available under the Open Database License (ODbL) 1.0.";
@@ -61,7 +63,21 @@ function calories(nutriments: Nutriments, basis: "serving" | "100g") {
   return kj === null ? null : Math.round(kj / 4.184 * 100) / 100;
 }
 
-function normalizeProduct(product: OffProduct, barcode: string) {
+/**
+ * Open Food Facts' nutriment key for each fat subtype.
+ *
+ * A product that never reported a subtype simply has no key, which stays null
+ * all the way to the diary. A product that reports `0` keeps its confirmed
+ * zero. Nothing here fills a gap with a guess.
+ */
+const fatSubtypeSources: Record<FatSubtype, string> = {
+  saturatedFat: "saturated-fat",
+  transFat: "trans-fat",
+  monounsaturatedFat: "monounsaturated-fat",
+  polyunsaturatedFat: "polyunsaturated-fat",
+};
+
+export function normalizeProduct(product: OffProduct, barcode: string) {
   const nutriments = (product.nutriments ?? {}) as Nutriments;
   const servingAmount = numberOrNull(product.serving_quantity);
   const servingLabel = String(product.serving_size ?? "").trim();
@@ -80,6 +96,14 @@ function normalizeProduct(product: OffProduct, barcode: string) {
     fiber: nutrient(nutriments, "fiber", basis),
   };
   const missing = Object.entries(values).filter(([, value]) => value === null).map(([key]) => key);
+
+  // Read on the same basis as everything above, so a per-serving product never
+  // mixes a per-100 g subtype into its serving. Most products carry saturated
+  // and trans fat only, so the rest are usually left unknown for the user to
+  // fill in by hand if they want them.
+  const fatDetail = Object.fromEntries(fatSubtypeKeys.map(key =>
+    [key, nutrient(nutriments, fatSubtypeSources[key], basis)])) as Record<FatSubtype, number | null>;
+  const missingFatDetail = fatSubtypeKeys.filter(key => fatDetail[key] === null);
 
   const name = String(product.product_name || product.product_name_en || product.generic_name || "").trim().slice(0, 150);
   const unit = String(product.serving_quantity_unit ?? "g").trim() || "g";
@@ -100,7 +124,9 @@ function normalizeProduct(product: OffProduct, barcode: string) {
     servingBasis: basis,
     packageSize: String(product.quantity ?? "").trim().slice(0, 60),
     ...values,
+    ...fatDetail,
     missing,
+    missingFatDetail,
     source: SOURCE,
     attribution: ATTRIBUTION,
   };

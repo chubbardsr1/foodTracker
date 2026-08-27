@@ -1,6 +1,9 @@
 import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { customFoods, foodEntries, nutritionGoals } from "../../../db/schema";
+import {
+  type FatSubtype, fatBreakdownProblem, fatSubtypeLabels, readFatBreakdown, scaleFatBreakdown,
+} from "../../nutrition";
 import { normalizeBarcode } from "../barcode/route";
 import { stampDailyGoal } from "../daily-goal";
 import { profileFrom } from "../profile";
@@ -8,6 +11,9 @@ import { profileFrom } from "../profile";
 const validMeals = new Set(["Breakfast", "Lunch", "Dinner", "Snacks"]);
 const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : NaN;
 const roundTwo = (value: number) => Math.round(value * 100) / 100;
+/** A blank subtype is allowed and means unknown; a bad one is refused outright. */
+const fatFieldError = (field: FatSubtype) =>
+  `${fatSubtypeLabels[field]} must be grams, zero or more. Leave it blank when the label does not give it.`;
 
 export async function GET(request: Request) {
   try {
@@ -29,11 +35,19 @@ export async function POST(request: Request) {
     const servings = numberValue(payload.servings ?? 1);
     const baseNutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
     if (!name || !serving || !validMeals.has(meal) || !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn) || !Number.isFinite(servings) || servings <= 0 || servings > 100 || Object.values(baseNutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every nutrition field with a valid value" }, { status: 400 });
+    // The four fat subtypes are optional. Blank stays null rather than becoming
+    // a zero, so an unrecorded value never reads as a label that said none.
+    const fatDetail = readFatBreakdown(payload);
+    if (!fatDetail.ok) return Response.json({ error: fatFieldError(fatDetail.field) }, { status: 400 });
+    const fatProblem = fatBreakdownProblem(baseNutrition.fat, fatDetail.value);
+    if (fatProblem) return Response.json({ error: fatProblem }, { status: 400 });
     const nutrition = Object.fromEntries(Object.entries(baseNutrition).map(([key, value]) => [key, roundTwo(value * servings)])) as typeof baseNutrition;
+    // Known subtypes scale with the servings exactly like calories and total fat.
+    const scaledFat = scaleFatBreakdown(fatDetail.value, servings);
     const entryServing = servings === 1 ? serving : `${roundTwo(servings)} × ${serving}`;
     const db = getDb();
     const owner = profileFrom(request);
-    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving: entryServing, ...nutrition }).returning();
+    const [entry] = await db.insert(foodEntries).values({ owner, eatenOn, meal, name, serving: entryServing, ...nutrition, ...scaledFat }).returning();
     await stampDailyGoal(db, owner, eatenOn);
     if (payload.saveCustom === true) {
       const barcode = payload.barcode ? normalizeBarcode(String(payload.barcode)) : null;
@@ -41,13 +55,15 @@ export async function POST(request: Request) {
         ? await db.select({ id: customFoods.id }).from(customFoods)
             .where(and(eq(customFoods.owner, owner), eq(customFoods.barcode, barcode))).limit(1)
         : [];
+      // The saved food keeps one full serving, so it takes the unscaled
+      // breakdown the form was reviewed with.
       if (existing[0]) {
-        await db.update(customFoods).set({ name, serving, ...baseNutrition })
+        await db.update(customFoods).set({ name, serving, ...baseNutrition, ...fatDetail.value })
           .where(and(eq(customFoods.id, existing[0].id), eq(customFoods.owner, owner)));
       } else {
-        await db.insert(customFoods).values({ owner, name, serving, ...baseNutrition, barcode }).onConflictDoUpdate({
+        await db.insert(customFoods).values({ owner, name, serving, ...baseNutrition, ...fatDetail.value, barcode }).onConflictDoUpdate({
           target: [customFoods.owner, customFoods.name, customFoods.serving],
-          set: { ...baseNutrition, ...(barcode ? { barcode } : {}) },
+          set: { ...baseNutrition, ...fatDetail.value, ...(barcode ? { barcode } : {}) },
         });
       }
     }
@@ -62,7 +78,13 @@ export async function PUT(request: Request) {
     const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? "");
     const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
     if (!Number.isInteger(id) || !name || !serving || !validMeals.has(meal) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every field with a valid value" }, { status: 400 });
-    const [entry] = await getDb().update(foodEntries).set({ meal, name, serving, ...nutrition })
+    // Editing one entry edits only that entry, subtypes included. A field left
+    // blank clears back to unknown rather than to zero.
+    const fatDetail = readFatBreakdown(payload);
+    if (!fatDetail.ok) return Response.json({ error: fatFieldError(fatDetail.field) }, { status: 400 });
+    const fatProblem = fatBreakdownProblem(nutrition.fat, fatDetail.value);
+    if (fatProblem) return Response.json({ error: fatProblem }, { status: 400 });
+    const [entry] = await getDb().update(foodEntries).set({ meal, name, serving, ...nutrition, ...fatDetail.value })
       .where(and(eq(foodEntries.id, id), eq(foodEntries.owner, profileFrom(request))))
       .returning();
     if (!entry) return Response.json({ error: "Diary entry was not found" }, { status: 404 });

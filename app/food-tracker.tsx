@@ -4,13 +4,19 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import ExportPanel from "./export-panel";
 import { exportSections as allExportSections } from "./export-shared";
 import {
-  type Profile, addDays, amount, localDate, longDate, mediumDate,
+  type FatBreakdown, type FatTotals,
+  UNKNOWN_FAT_LABEL, aggregateFat, emptyFatTotals, fatCoverageNote, fatSubtypeKeys, fatSubtypeLabels,
+  fatSubtypeShortLabels, gramsOrUnknown, hasFatDetail, unclassifiedFat,
+} from "./nutrition";
+import {
+  type Profile, addDays, amount, lastCompleteDays, localDate, longDate, mediumDate,
   profileNames, round, shortDate, weekdayLabel, whole,
 } from "./shared";
 import WeightChart from "./weight-chart";
 
 type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
-type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number };
+/** A saved diary entry. The fat subtypes are null on anything logged before the breakdown existed. */
+type Entry = { id: number; eatenOn: string; meal: Meal; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number } & FatBreakdown;
 type WaterEntry = { id: number; drankOn: string; ounces: number };
 type ExerciseEntry = { id: number; exercisedOn: string; activity: string; minutes: number; calories: number; comments: string };
 /** One activity within a day, as the Reports feed returns it. */
@@ -18,14 +24,15 @@ type ActivitySession = { activity: string; minutes: number; calories: number; co
 type WeightEntry = { id: number; weighedOn: string; pounds: number; note: string };
 type StepEntry = { id: number; steppedOn: string; steps: number };
 type JournalEntry = { id: number; entryOn: string; body: string; source: string; updatedAt: string };
-type Food = { id: number; name: string; serving: string; servingGrams?: number; calories: number; protein: number; fat: number; carbs: number; fiber: number; barcode?: string | null };
+/** A saved food. Its nutrition, fat subtypes included, is for one full serving. */
+type Food = { id: number; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; barcode?: string | null } & FatBreakdown;
 /** Prefill for the Add Food form. Missing nutrition stays undefined so the field renders empty. */
-type Draft = { id?: number; name: string; serving: string; calories?: number; protein?: number; fat?: number; carbs?: number; fiber?: number; barcode?: string | null };
-type Source = "manual" | "saved" | "usda" | "barcode" | "ai";
+type Draft = { id?: number; name: string; serving: string; calories?: number; protein?: number; fat?: number; carbs?: number; fiber?: number; barcode?: string | null } & Partial<FatBreakdown>;
+type Source = "manual" | "saved" | "barcode" | "ai";
 type MealEstimate = {
   foodName: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number;
   assumptions: string[]; confidence: string; warnings: string[];
-};
+} & FatBreakdown;
 /** One piece of a described workout, with the MET the server calculated it from. */
 type ActivitySegment = { name: string; minutes: number; met: number; intensity: string; assumptions: string; calories: number };
 type ActivityEstimate = {
@@ -37,18 +44,20 @@ type ScannedProduct = {
   barcode: string; name: string; brand: string; serving: string; servingDescription: string;
   servingAmount: number | null; servingUnit: string; servingBasis: "serving" | "100g"; packageSize: string;
   calories: number | null; protein: number | null; fat: number | null; carbs: number | null; fiber: number | null;
+  /** Subtypes Open Food Facts had no figure for. Never turned into a zero. */
+  missingFatDetail: string[];
   missing: string[]; source: string; attribution: string;
-};
+} & FatBreakdown;
 type Goals = { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number };
 type View = "diary" | "foods" | "reports" | "calendar" | "weight" | "journal";
 type CalendarDay = {
   date: string; calories: number; items: number; goalCalories: number; goalSource: "saved" | "current";
   remaining: number; status: "none" | "under" | "over" | "way-over";
   exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string;
-  hasMovement: boolean; hasData: boolean;
+  steps: number; hasMovement: boolean; hasData: boolean;
 };
-type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string; movement?: ActivitySession[]; steps: number | null };
-type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; steps: number; daysInRange: number; daysWithFood: number; daysWithExercise: number; daysWithSteps: number };
+type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string; movement?: ActivitySession[]; steps: number | null; fatDetail?: FatTotals };
+type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; steps: number; daysInRange: number; daysWithFood: number; daysWithExercise: number; daysWithSteps: number; fatDetail?: FatTotals };
 type ReportAverages = { caloriesPerDay: number; caloriesPerLoggedDay: number; exerciseMinutesPerDay: number; stepsPerRecordedDay: number };
 
 const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
@@ -73,7 +82,12 @@ function defaultMealForNow(): Meal {
 const statusLabels: Record<CalendarDay["status"], string> = {
   none: "Nothing logged", under: "Under goal", over: "Over goal", "way-over": "More than 500 over",
 };
-const nutritionLabels: Record<string, string> = { calories: "Calories", protein: "Protein", fat: "Fat", carbs: "Total carbs", fiber: "Fiber" };
+const nutritionLabels: Record<string, string> = {
+  calories: "Calories", protein: "Protein", fat: "Fat", carbs: "Total carbs", fiber: "Fiber",
+  ...fatSubtypeLabels,
+};
+/** An empty number input must stay empty, so a null prefill becomes undefined. */
+const fieldValue = (value: number | null | undefined) => value ?? undefined;
 const barcodeDigits = (value: string) => value.replace(/\D/g, "");
 function monthKey(date: string) { return date.slice(0, 7); }
 function shiftMonth(month: string, step: number) {
@@ -82,6 +96,24 @@ function shiftMonth(month: string, step: number) {
   return `${moved.getUTCFullYear()}-${String(moved.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 function monthLabel(month: string) { return new Date(`${month}-01T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" }); }
+
+/**
+ * The fat subtypes as indented plain-text lines, for the copied day summary.
+ *
+ * Nothing is produced when no food that day recorded a breakdown, so the
+ * compact summary is unchanged for anyone who is not tracking subtypes.
+ */
+function fatBreakdownLines(totals: FatTotals) {
+  if (!hasFatDetail(totals)) return [];
+  const lines = fatSubtypeKeys.map(key => {
+    const value = totals.subtotals[key];
+    const partial = value !== null && totals.missing[key] > 0 ? ` (from ${totals.known[key]} of ${totals.records} foods)` : "";
+    return `  ${fatSubtypeShortLabels[key]}: ${value === null ? UNKNOWN_FAT_LABEL : `${amount(value)}g`}${partial}`;
+  });
+  const other = unclassifiedFat(totals);
+  if (other !== null) lines.push(`  Unclassified: ${amount(other)}g`);
+  return lines;
+}
 
 export default function FoodTracker() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -103,6 +135,7 @@ export default function FoodTracker() {
   const [view, setView] = useState<View>("diary");
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [message, setMessage] = useState("");
+  const [fatDetailOpen, setFatDetailOpen] = useState(false);
   // Bumped on every copy so the same confirmation can be shown twice running.
   const [copyNote, setCopyNote] = useState<{ id: number; text: string } | null>(null);
 
@@ -155,6 +188,11 @@ export default function FoodTracker() {
     fat: sum.fat + item.fat, carbs: sum.carbs + item.carbs, fiber: sum.fiber + item.fiber,
     netCarbs: sum.netCarbs + Math.max(0, item.carbs - item.fiber),
   }), { calories: 0, protein: 0, fat: 0, carbs: 0, fiber: 0, netCarbs: 0 }), [entries]);
+  /**
+   * The day's fat, subtype by subtype, from the one shared aggregation the
+   * reports and both PDFs use. Total fat above is unaffected by it.
+   */
+  const fatDetail = useMemo(() => aggregateFat(entries), [entries]);
   const waterTotal = water.reduce((sum, item) => sum + item.ounces, 0);
   const exerciseMinutes = exercise.reduce((sum, item) => sum + item.minutes, 0);
   const exerciseCalories = exercise.reduce((sum, item) => sum + item.calories, 0);
@@ -170,6 +208,9 @@ export default function FoodTracker() {
       `Net carbs: ${round(totals.netCarbs)}g of ${goals.netCarbs}g`,
       `Protein: ${round(totals.protein)}g of ${goals.protein}g`,
       `Fat: ${round(totals.fat)}g of ${goals.fat}g`,
+      // Indented under Fat, and only when something actually recorded a
+      // breakdown, so the copied day stays as short as it always was.
+      ...fatBreakdownLines(fatDetail),
       `Fiber: ${round(totals.fiber)}g of ${goals.fiber}g`,
       "",
       `Activity: ${round(exerciseMinutes)} minutes${exerciseCalories > 0 ? ` · ${Math.round(exerciseCalories)} calories burned` : ""}`,
@@ -245,8 +286,13 @@ export default function FoodTracker() {
 
   return <main className="app-shell">
     <header className="topbar">
-      <div className="brand-mark">N</div>
-      <div><p className="eyebrow">{active.eyebrow}</p><h1>{active.title}</h1></div>
+      <div className="brand-refresh" role="button" tabIndex={0} aria-label="Refresh Nourish"
+        title="Refresh Nourish"
+        onClick={() => window.location.reload()}
+        onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); window.location.reload(); } }}>
+        <div className="brand-mark">N</div>
+        <div><p className="eyebrow">{active.eyebrow}</p><h1>{active.title}</h1></div>
+      </div>
       <button className="profile-button" onClick={() => { window.localStorage.removeItem("foodTrackerProfile"); setProfile(null); }} aria-label="Switch profile">
         <span>{profileNames[profile].charAt(0)}</span>{profileNames[profile]}
       </button>
@@ -279,7 +325,8 @@ export default function FoodTracker() {
       <section className="macro-grid">
         <Macro label="Net carbs" value={round(totals.netCarbs)} goal={goals.netCarbs} color="purple" />
         <Macro label="Protein" value={round(totals.protein)} goal={goals.protein} color="coral" />
-        <Macro label="Fat" value={round(totals.fat)} goal={goals.fat} color="gold" />
+        <Macro label="Fat" value={round(totals.fat)} goal={goals.fat} color="gold"
+          onOpen={() => setFatDetailOpen(true)} openLabel="Show today's fat breakdown" />
         <Macro label="Fiber" value={round(totals.fiber)} goal={goals.fiber} color="green" />
       </section>
       <div className="copy-day">
@@ -328,6 +375,7 @@ export default function FoodTracker() {
     {customWaterOpen && <CustomWater onClose={() => setCustomWaterOpen(false)} onAdd={(ounces) => { void addWater(ounces); setCustomWaterOpen(false); }} />}
     {exerciseOpen && <AddExercise date={date} profile={profile} onClose={() => setExerciseOpen(false)} onSaved={(entry) => { setExercise(current => [...current, entry]); setExerciseOpen(false); }} />}
     {editingExercise && <EditExercise entry={editingExercise} profile={profile} onClose={() => setEditingExercise(null)} onSaved={(entry) => { setExercise(current => current.map(item => item.id === entry.id ? entry : item)); setEditingExercise(null); }} />}
+    {fatDetailOpen && <FatBreakdownDialog totals={fatDetail} goal={goals.fat} onClose={() => setFatDetailOpen(false)} />}
     {editingEntry && <EditDiaryEntry entry={editingEntry} profile={profile} onClose={() => setEditingEntry(null)} onSaved={(entry) => { setEntries(current => current.map(item => item.id === entry.id ? entry : item)); setEditingEntry(null); }} />}
   </main>;
 }
@@ -517,9 +565,13 @@ function CalendarPage({ profile, onOpenDay }: { profile: Profile; onOpenDay: (da
         {days.map(day => <button key={day.date} type="button"
           className={`calendar-day status-${day.status}${day.date === today ? " is-today" : ""}${day.hasData ? "" : " is-empty"}`}
           onClick={() => setSelected(day)}
-          aria-label={`${longDate(day.date)}: ${day.items > 0 ? `${Math.round(day.calories)} calories against a ${day.goalCalories} goal, ${statusLabels[day.status]}` : "nothing logged"}, ${day.hasMovement ? `${round(day.exerciseMinutes)} minutes of movement` : "no movement"}`}>
+          aria-label={`${longDate(day.date)}: ${day.items > 0 ? `${Math.round(day.calories)} calories against a ${day.goalCalories} goal, ${statusLabels[day.status]}` : "nothing logged"}, ${day.hasMovement ? `${round(day.exerciseMinutes)} minutes of movement` : "no movement"}, ${day.steps > 0 ? `${whole(day.steps)} steps` : "no steps"}`}>
           <span className="calendar-date">{Number(day.date.slice(8))}</span>
-          <span className="calendar-calories">{day.items > 0 ? Math.round(day.calories) : ""}</span>
+          {day.hasData && <>
+            <span className="calendar-calories">{whole(day.calories)} Cal</span>
+            <span className="calendar-metric">{whole(day.exerciseMinutes)} min</span>
+            <span className="calendar-metric">{whole(day.steps)} steps</span>
+          </>}
           <span className={`calendar-dot${day.hasMovement ? " moved" : ""}`} aria-hidden="true" />
         </button>)}
       </div>
@@ -585,9 +637,10 @@ function DayDetail({ day, profile, onClose, onOpenDay, onSaved }: { day: Calenda
 }
 
 function ReportsPage({ profile }: { profile: Profile }) {
-  const today = localDate();
-  const [start, setStart] = useState(addDays(today, -6));
-  const [end, setEnd] = useState(today);
+  // Presets and this default end on the last completed day; see lastCompleteDays.
+  const initial = lastCompleteDays(7);
+  const [start, setStart] = useState(initial.start);
+  const [end, setEnd] = useState(initial.end);
   const [report, setReport] = useState<{ key: string; days: ReportDay[]; totals: ReportTotals | null; averages: ReportAverages | null } | null>(null);
   const [error, setError] = useState("");
   const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
@@ -611,7 +664,9 @@ function ReportsPage({ profile }: { profile: Profile }) {
   const averages = ready ? report.averages : null;
   const loading = !rangeInvalid && !ready;
 
-  function applyLastDays(count: number) { const last = localDate(); setStart(addDays(last, -(count - 1))); setEnd(last); }
+  // Read the clock again rather than reusing the render-time value, so a page
+  // left open overnight still reports against the day that just ended.
+  function applyLastDays(count: number) { const range = lastCompleteDays(count); setStart(range.start); setEnd(range.end); }
   const maxCalories = days.reduce((high, day) => Math.max(high, day.calories), 0);
   const maxMinutes = days.reduce((high, day) => Math.max(high, day.exerciseMinutes), 0);
 
@@ -674,6 +729,8 @@ function ReportsPage({ profile }: { profile: Profile }) {
         </table>
       </div>
 
+      <FatReport totals={totals?.fatDetail ?? emptyFatTotals()} recordedDays={totals?.daysWithFood ?? 0} />
+
       {days.some(day => (day.movement ?? []).length > 0) && <div className="report-movement">
         <h3>Movement log</h3>
         <p className="page-help">Each recorded activity in this range, with the comments saved against it.</p>
@@ -688,6 +745,51 @@ function ReportsPage({ profile }: { profile: Profile }) {
       </div>}
     </>}
   </section>;
+}
+
+/**
+ * Fat across a report range: total fat first, then each subtype beneath it.
+ *
+ * Averages follow the same recorded-day rule the rest of the report uses —
+ * days holding at least one food entry, never every calendar day. A subtype
+ * nothing recorded reads "Not available" rather than 0 g, and a subtype only
+ * some entries carried is shown with the count it covers.
+ */
+function FatReport({ totals, recordedDays }: { totals: FatTotals; recordedDays: number }) {
+  const perDay = (value: number | null) => value === null || recordedDays === 0
+    ? "—"
+    : `${amount(Math.round(value / recordedDays * 100) / 100)} g`;
+  const note = fatCoverageNote(totals);
+  return <div className="report-fat">
+    <h3>Fat breakdown</h3>
+    <p className="page-help">
+      {totals.records === 0
+        ? "No food was recorded in this range."
+        : `Averages cover the ${recordedDays} ${recordedDays === 1 ? "day" : "days"} holding at least one food entry, not every day in the range. The subtypes are not expected to add up to total fat.`}
+    </p>
+    {totals.records > 0 && <>
+      <div className="report-table-wrap">
+        <table className="report-table">
+          <caption className="report-visually-hidden">Total fat and fat subtypes for this range</caption>
+          <thead><tr><th scope="col">Fat</th><th scope="col">Total</th><th scope="col">Per recorded day</th><th scope="col">Entries</th></tr></thead>
+          <tbody>
+            <tr>
+              <th scope="row"><strong>Total fat</strong></th>
+              <td>{amount(totals.total)} g</td><td>{perDay(totals.total)}</td>
+              <td>{totals.records} of {totals.records}</td>
+            </tr>
+            {fatSubtypeKeys.map(key => <tr key={key} className={totals.subtotals[key] === null ? "report-empty-day" : ""}>
+              <th scope="row"><strong>{fatSubtypeLabels[key]}</strong></th>
+              <td>{gramsOrUnknown(totals.subtotals[key])}</td>
+              <td>{perDay(totals.subtotals[key])}</td>
+              <td>{totals.known[key]} of {totals.records}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      {note && <p className="page-help report-fat-note">{note}</p>}
+    </>}
+  </div>;
 }
 
 /**
@@ -926,8 +1028,39 @@ function JournalPage({ profile }: { profile: Profile }) {
   </section>;
 }
 
+/**
+ * The four optional fat subtypes, tucked behind one toggle so the form is no
+ * longer than it was for anyone who does not track them.
+ *
+ * The fields stay in the DOM when collapsed, only hidden, so submitting a
+ * collapsed section keeps whatever values were already there instead of
+ * silently clearing them. A blank field means "not available" and is stored as
+ * such; it is never turned into a zero, and a real 0 can always be typed.
+ */
+function FatFields({ values }: { values: Partial<FatBreakdown> }) {
+  const filled = fatSubtypeKeys.filter(key => values[key] !== null && values[key] !== undefined).length;
+  const [open, setOpen] = useState(filled > 0);
+  return <div className="fat-fields">
+    <button type="button" className="fat-fields-toggle" aria-expanded={open} onClick={() => setOpen(current => !current)}>
+      <span>Fat breakdown <small>{filled > 0 ? `${filled} of 4 filled in` : "optional"}</small></span>
+      <span aria-hidden="true">{open ? "−" : "+"}</span>
+    </button>
+    <div hidden={!open}>
+      <div className="form-grid">
+        {fatSubtypeKeys.map(key => <label key={key}>{fatSubtypeLabels[key]} (g)
+          <input name={key} type="number" min="0" step="0.01" inputMode="decimal" defaultValue={fieldValue(values[key])} />
+        </label>)}
+      </div>
+      <small className="field-help">Leave a box empty when the label does not give it — empty is kept as “not available”, never as zero. Enter 0 only when the food really has none. The four do not have to add up to total fat.</small>
+    </div>
+  </div>;
+}
+
 function NutritionFields({ item }: { item: Food | Entry }) {
-  return <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={item.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={item.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={item.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={item.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" required defaultValue={item.fiber} /></label></div>;
+  return <>
+    <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={item.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={item.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={item.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={item.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" required defaultValue={item.fiber} /></label></div>
+    <FatFields values={item} />
+  </>;
 }
 
 function EditSavedFood({ food, profile, onClose, onSaved }: { food: Food; profile: Profile; onClose: () => void; onSaved: (food: Food) => void }) {
@@ -960,11 +1093,96 @@ function ProfileChooser({ onSelect }: { onSelect: (profile: Profile) => void }) 
   return <main className="profile-screen"><div className="profile-panel"><div className="brand-mark large">N</div><p className="eyebrow">Daily Food Tracker</p><h1>Who is tracking?</h1><p>Your food, goals, water, exercise, and custom foods stay in your own profile.</p><div className="profile-options"><button onClick={() => onSelect("chris")}><span>C</span><strong>Chris</strong></button><button onClick={() => onSelect("sarah")}><span>S</span><strong>Sarah</strong></button></div></div></main>;
 }
 
-function Macro({ label, value, goal, color }: { label: string; value: number; goal: number; color: string }) {
-  return <div className="macro"><div className="macro-label"><span>{label}</span><b>{value}g</b></div><div className="progress"><i className={color} style={{ width: `${Math.min(100, value / goal * 100)}%` }} /></div><small>{Math.max(0, round(goal - value))}g left</small></div>;
+/**
+ * One macro card. Given `onOpen` it becomes a real button, so it opens with a
+ * click, with Enter, or with Space, and keeps the same appearance either way.
+ */
+function Macro({ label, value, goal, color, onOpen, openLabel }: { label: string; value: number; goal: number; color: string; onOpen?: () => void; openLabel?: string }) {
+  const body = <>
+    <div className="macro-label"><span>{label}</span><b>{value}g</b></div>
+    <div className="progress"><i className={color} style={{ width: `${Math.min(100, value / goal * 100)}%` }} /></div>
+    <small>{Math.max(0, round(goal - value))}g left</small>
+  </>;
+  if (!onOpen) return <div className="macro">{body}</div>;
+  return <button type="button" className="macro macro-button" onClick={onOpen}
+    aria-haspopup="dialog" aria-label={`${label} ${value} grams of ${goal}. ${openLabel ?? "Show more"}.`}>
+    {body}
+    <span className="macro-more" aria-hidden="true">Breakdown</span>
+  </button>;
 }
 
-/** Type-ahead picker over the profile's own saved foods. USDA search stays separate. */
+/**
+ * Today's fat, subtype by subtype.
+ *
+ * Total fat and its goal are unchanged from the card behind it. A subtype no
+ * food recorded says so rather than showing 0 g, and a sum that covers only
+ * some of the day's foods says how many it covers. The four are never made to
+ * add up to total fat.
+ */
+function FatBreakdownDialog({ totals, goal, onClose }: { totals: FatTotals; goal: number; onClose: () => void }) {
+  const panel = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Focus moves into the dialog and returns to the card when it closes, so a
+    // keyboard or screen-reader user is never dropped at the top of the page.
+    const opener = document.activeElement as HTMLElement | null;
+    panel.current?.focus();
+    function keyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+    }
+    document.addEventListener("keydown", keyDown);
+    return () => { document.removeEventListener("keydown", keyDown); opener?.focus?.(); };
+  }, [onClose]);
+
+  const remaining = round(goal - totals.total);
+  const detailed = hasFatDetail(totals);
+  const complete = totals.records > 0 && fatSubtypeKeys.every(key => totals.missing[key] === 0);
+  // Only shown when every food carried every subtype; otherwise the shortfall
+  // could just be a subtype nobody reported, which is not "unclassified".
+  const other = unclassifiedFat(totals);
+  const help = totals.records === 0
+    ? "Nothing is logged for today yet."
+    : !detailed
+      ? "None of today's foods record a fat breakdown, so only total fat is available. Add the subtypes when you enter or edit a food and they will appear here."
+      : complete
+        ? "Subtypes are not expected to add up to total fat: labels round each line on its own and some fat is never reported as any subtype."
+        : "Some of today's foods do not record every subtype, so each amount below covers only the foods that recorded it and the real total is higher.";
+
+  return <div className="modal-backdrop" onMouseDown={onClose}>
+    <div className="modal compact" ref={panel} tabIndex={-1} onMouseDown={event => event.stopPropagation()}
+      role="dialog" aria-modal="true" aria-labelledby="fat-detail-title" aria-describedby="fat-detail-help">
+      <div className="modal-head">
+        <div><p className="eyebrow">Today</p><h2 id="fat-detail-title">Fat breakdown</h2></div>
+        <button onClick={onClose} aria-label="Close">×</button>
+      </div>
+      <dl className="product-meta">
+        <div><dt>Total fat</dt><dd>{amount(totals.total)} g</dd></div>
+        <div><dt>Daily goal</dt><dd>{amount(goal)} g</dd></div>
+        <div><dt>{remaining < 0 ? "Over goal by" : "Remaining"}</dt>
+          <dd className={remaining < 0 ? "flagged" : ""}>{amount(Math.abs(remaining))} g</dd></div>
+        <div><dt>Foods counted</dt><dd>{totals.records} {totals.records === 1 ? "item" : "items"}</dd></div>
+      </dl>
+      <ul className="fat-detail-list">
+        {fatSubtypeKeys.map(key => <li key={key}>
+          <span>{fatSubtypeLabels[key]}</span>
+          <b className={totals.subtotals[key] === null ? "unknown" : ""}>{gramsOrUnknown(totals.subtotals[key])}</b>
+          <small>{totals.known[key] === 0
+            ? "Not recorded on any food today"
+            : totals.missing[key] === 0
+              ? `From all ${totals.records} ${totals.records === 1 ? "food" : "foods"}`
+              : `From ${totals.known[key]} of ${totals.records} foods`}</small>
+        </li>)}
+        {other !== null && <li>
+          <span>Unclassified fat</span>
+          <b>{amount(other)} g</b>
+          <small>Total fat the four subtypes above do not account for</small>
+        </li>}
+      </ul>
+      <p className="fat-detail-help" id="fat-detail-help">{help}</p>
+    </div>
+  </div>;
+}
+
+/** Type-ahead picker over the profile's own saved foods. */
 function SavedFoodPicker({ foods, selectedId, onSelect, onClear }: { foods: Food[]; selectedId: number | null; onSelect: (food: Food) => void; onClear: () => void }) {
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
@@ -1125,18 +1343,16 @@ function cameraMessage(reason: unknown) {
 
 const MAX_MEAL_DESCRIPTION = 1500;
 
-type Method = "saved" | "describe" | "scan" | "search" | "manual";
+type Method = "saved" | "describe" | "scan" | "manual";
 const methods: { id: Method; label: string; hint: string }[] = [
   { id: "saved", label: "Saved", hint: "Pick something you have logged before." },
   { id: "describe", label: "Describe", hint: "Type or dictate the meal and let the assistant estimate it." },
   { id: "scan", label: "Scan", hint: "Scan a packaged product barcode." },
-  { id: "search", label: "Search", hint: "Look the food up in the USDA database." },
   { id: "manual", label: "Manual", hint: "Type the nutrition in yourself." },
 ];
 const sourceSummaries: Record<Source, string> = {
   manual: "Entered by hand",
   saved: "From your saved foods",
-  usda: "From USDA search",
   barcode: "From the product barcode",
   ai: "AI estimate — check it before saving",
 };
@@ -1145,8 +1361,7 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [mealChoice, setMealChoice] = useState<Meal>(meal);
   const [method, setMethod] = useState<Method>("saved");
-  const [query, setQuery] = useState(""); const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<Food[]>([]); const [myFoods, setMyFoods] = useState<Food[]>([]);
+  const [myFoods, setMyFoods] = useState<Food[]>([]);
   const [selected, setSelected] = useState<Draft | null>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
   const [source, setSource] = useState<Source>("manual");
@@ -1186,8 +1401,6 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
     resetSources();
   }
 
-  async function searchFoods() { if (query.trim().length < 2) return; setSearching(true); setError(""); const response = await fetch(`/api/foods?q=${encodeURIComponent(query)}`); const data = await response.json(); if (response.ok) setResults(data.foods ?? []); else setError(data.error ?? "Food search is unavailable"); setSearching(false); }
-
   /** Asks the server for a Gemini estimate, then prefills the form for review. Nothing is saved. */
   async function estimateMeal() {
     const text = description.trim();
@@ -1203,6 +1416,10 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
         setSelected({
           name: result.foodName, serving: "1 serving",
           calories: result.calories, protein: result.protein, fat: result.fat, carbs: result.carbs, fiber: result.fiber,
+          // A subtype the assistant could not determine stays null, so its field
+          // renders empty rather than claiming the food contains none.
+          saturatedFat: result.saturatedFat, transFat: result.transFat,
+          monounsaturatedFat: result.monounsaturatedFat, polyunsaturatedFat: result.polyunsaturatedFat,
         });
         setSelectionKey(current => current + 1);
       } else {
@@ -1232,6 +1449,10 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
           serving: product.serving,
           calories: product.calories ?? undefined, protein: product.protein ?? undefined, fat: product.fat ?? undefined,
           carbs: product.carbs ?? undefined, fiber: product.fiber ?? undefined,
+          // Open Food Facts usually carries saturated and trans fat only. The
+          // rest stay null and can be typed in below before saving.
+          saturatedFat: product.saturatedFat, transFat: product.transFat,
+          monounsaturatedFat: product.monounsaturatedFat, polyunsaturatedFat: product.polyunsaturatedFat,
           barcode: product.barcode,
         });
         setSavedId(null); setSelectionKey(current => current + 1);
@@ -1263,6 +1484,7 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
   }
 
   const missingLabels = (scanned?.missing ?? []).map(field => nutritionLabels[field] ?? field);
+  const missingFatLabels = (scanned?.missingFatDetail ?? []).map(field => nutritionLabels[field] ?? field);
   const activeMethod = methods.find(item => item.id === method) ?? methods[0];
 
   return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="add-title">
@@ -1298,6 +1520,17 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
               <div><dt>Covers</dt><dd>{estimate.serving}</dd></div>
               <div><dt>Confidence</dt><dd className={estimate.confidence === "low" ? "flagged" : ""}>{estimate.confidence}</dd></div>
             </dl>
+            <div className="ai-list">
+              <p className="ai-list-title">Fat breakdown</p>
+              <ul className="ai-fat-list">
+                <li><strong>Total fat</strong><span>{amount(estimate.fat)} g</span></li>
+                {fatSubtypeKeys.map(key => <li key={key}>
+                  <strong>{fatSubtypeLabels[key]}</strong>
+                  <span className={estimate[key] === null ? "unknown" : ""}>{gramsOrUnknown(estimate[key])}</span>
+                </li>)}
+              </ul>
+              <p className="ai-fat-note">Anything the assistant could not work out is left blank rather than guessed at zero. Correct or fill in any of these under Fat breakdown below before adding the food.</p>
+            </div>
             {estimate.assumptions.length > 0 && <div className="ai-list"><p className="ai-list-title">Assumptions</p><ul>{estimate.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
             {estimate.warnings.length > 0 && <div className="ai-list warnings"><p className="ai-list-title">Warnings</p><ul>{estimate.warnings.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
             <p className="ai-tip">A packaged food label or a barcode scan is more accurate than an estimate whenever one is available.</p>
@@ -1324,14 +1557,13 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
             {missingLabels.length > 0
               ? <p className="product-missing">⚠ Open Food Facts has no {missingLabels.join(", ")} for this product. Those fields are blank below — enter them yourself. Nothing is guessed.</p>
               : <p className="product-complete">✓ All nutrition fields came from the product record. Review them before saving.</p>}
+            {missingFatLabels.length > 0
+              ? <p className="product-missing">⚠ No {missingFatLabels.join(", ").toLowerCase()} on this product record. Those boxes are blank under Fat breakdown below and stay “not available” unless you fill them in. Nothing is guessed.</p>
+              : <p className="product-complete">✓ A full fat breakdown came from the product record.</p>}
             <p className="product-credit">{scanned.attribution}</p>
           </div>}
         </>}
 
-        {method === "search" && <>
-          <div className="food-search"><input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void searchFoods(); } }} placeholder="Search USDA foods…" aria-label="Search USDA foods" /><button type="button" onClick={() => void searchFoods()} disabled={searching}>{searching ? "…" : "Search"}</button></div>
-          {results.length > 0 && <div className="search-results">{results.map(food => <button key={food.id} type="button" onClick={() => { pick(food, "usda"); setResults([]); }}><strong>{food.name}</strong><span>{food.serving} · {Math.round(food.calories)} cal · {round(food.carbs - food.fiber)}g net</span></button>)}</div>}
-        </>}
       </div>
     </section>
 
@@ -1349,6 +1581,7 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
         <label>Serving<input name="serving" placeholder="e.g. 4 oz or 1/2 cup" required defaultValue={selected?.serving ?? ""} /></label>
         <label>Servings eaten<input name="servings" type="number" min="0.01" max="100" step="0.01" required defaultValue="1.00" /><small>Use 0.50 for half a serving. Nutrition is adjusted automatically.</small></label>
         <div className="form-grid"><label>Calories<input name="calories" type="number" min="0" step="0.01" required defaultValue={selected?.calories} /></label><label>Protein (g)<input name="protein" type="number" min="0" step="0.01" required defaultValue={selected?.protein} /></label><label>Fat (g)<input name="fat" type="number" min="0" step="0.01" required defaultValue={selected?.fat} /></label><label>Total carbs (g)<input name="carbs" type="number" min="0" step="0.01" required defaultValue={selected?.carbs} /></label><label>Fiber (g)<input name="fiber" type="number" min="0" step="0.01" required defaultValue={selected?.fiber} /></label></div>
+        <FatFields key={`fat-${selectionKey}`} values={selected ?? {}} />
         {savedId === null && <label className="checkbox-row"><input name="saveCustom" type="checkbox" defaultChecked={source !== "ai"} /><span>{source === "ai" ? "Save to My Foods" : "Save this to My Foods"}</span></label>}
         {error && <p className="form-error">{error}</p>}
         <button className="primary" disabled={busy}>{busy ? "Saving…" : `Add to ${mealChoice}`}</button>

@@ -1,10 +1,15 @@
 import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { customFoods } from "../../../db/schema";
+import {
+  type FatSubtype, fatBreakdownProblem, fatSubtypeLabels, readFatBreakdown,
+} from "../../nutrition";
 import { normalizeBarcode } from "../barcode/route";
 import { profileFrom } from "../profile";
 
 const numberValue = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : NaN;
+const fatFieldError = (field: FatSubtype) =>
+  `${fatSubtypeLabels[field]} must be grams, zero or more. Leave it blank when the label does not give it.`;
 
 export async function GET(request: Request) {
   try {
@@ -26,6 +31,12 @@ export async function PUT(request: Request) {
     const serving = String(payload.serving ?? "").trim();
     const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
     if (!Number.isInteger(id) || !name || !serving || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every field with a valid value" }, { status: 400 });
+    // A saved food from before the fat breakdown existed can be given one here,
+    // and a blank field leaves the subtype unknown rather than setting it to 0.
+    const fatDetail = readFatBreakdown(payload);
+    if (!fatDetail.ok) return Response.json({ error: fatFieldError(fatDetail.field) }, { status: 400 });
+    const fatProblem = fatBreakdownProblem(nutrition.fat, fatDetail.value);
+    if (fatProblem) return Response.json({ error: fatProblem }, { status: 400 });
     const rawBarcode = payload.barcode === undefined || payload.barcode === null ? "" : String(payload.barcode).trim();
     const barcode = rawBarcode ? normalizeBarcode(rawBarcode) : null;
     if (rawBarcode && !barcode) return Response.json({ error: "That barcode does not look right. Enter 8, 12, 13, or 14 digits." }, { status: 400 });
@@ -35,7 +46,7 @@ export async function PUT(request: Request) {
         .where(and(eq(customFoods.owner, owner), eq(customFoods.barcode, barcode))).limit(1);
       if (clash[0] && clash[0].id !== id) return Response.json({ error: "Another saved food already uses that barcode." }, { status: 409 });
     }
-    const [food] = await getDb().update(customFoods).set({ name, serving, ...nutrition, ...(rawBarcode ? { barcode } : {}) })
+    const [food] = await getDb().update(customFoods).set({ name, serving, ...nutrition, ...fatDetail.value, ...(rawBarcode ? { barcode } : {}) })
       .where(and(eq(customFoods.id, id), eq(customFoods.owner, owner)))
       .returning();
     if (!food) return Response.json({ error: "Saved food was not found" }, { status: 404 });

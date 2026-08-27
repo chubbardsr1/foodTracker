@@ -96,9 +96,9 @@ Run a new migration locally with:
 npx wrangler d1 execute DB --local --config=.\wrangler.local.jsonc --persist-to=.\.local-data --file=.\drizzle\<migration-file>.sql
 ```
 
-Migrations `0000`, `0001`, and `0002` are already established. Do not
-normally rerun them. New schema changes must use the next numbered SQL file in
-`drizzle`, starting with `0003_...`.
+Migrations `0000` through `0009` are already established. Do not normally
+rerun them. New schema changes must use the next numbered SQL file in
+`drizzle`, starting with `0010_...`.
 
 ## Production
 
@@ -117,10 +117,9 @@ Production infrastructure:
 - Cloudflare Access restricts the site to Chris and Sarah using emailed login
   codes.
 
-Migrations `0000_short_centennial.sql`,
-`0001_profiles_water_custom_foods.sql`, and
-`0002_fiber_exercise.sql` have already been applied to production. Never
-apply those production migrations again.
+Every migration in `drizzle` through `0009_fat_breakdown.sql` has already
+been applied to production. Never apply those production migrations again.
+`Push to Production.md` holds the authoritative list.
 
 For a newly created migration, the production command is:
 
@@ -147,9 +146,13 @@ must be applied remotely before deploying code that requires its new schema.
 - Editing a diary item changes only that specific diary entry.
 - Saved custom foods retain nutrition for one full serving.
 - Fractional servings, such as `0.50`, scale the diary nutrition values.
-- USDA results display practical ounce-based serving information.
 - Nutrition values support two decimal places.
 - Net carbohydrates are calculated as total carbohydrates minus fiber.
+- Total fat is the primary fat value and is never derived from its subtypes.
+- Saturated, trans, monounsaturated, and polyunsaturated fat are nullable.
+  Null means the value was never recorded; 0 means a source reported none.
+  Never turn a missing subtype into a zero, never force the four to add up to
+  total fat, and never show an unknown value as `0 g`.
 - Never expose one profile's data to the other profile.
 - Every update and delete must include the current profile/owner in its database
   condition.
@@ -157,12 +160,12 @@ must be applied remotely before deploying code that requires its new schema.
 ## Current feature set
 
 - Breakfast, lunch, dinner, and snack diary entries
-- USDA FoodData Central search
 - Manual and reusable custom foods
 - My Foods management and editing
 - Editing individual diary entries
 - Ounce servings and fractional serving scaling
-- Calories, protein, fat, total carbs, fiber, and net carbs
+- Calories, protein, total fat, saturated/trans/monounsaturated/polyunsaturated
+  fat, total carbs, fiber, and net carbs
 - Per-profile daily goals
 - Water tracking
 - Exercise tracking
@@ -178,7 +181,7 @@ It should accept typed or dictated ingredients and quantities, return food name,
 serving, calories, protein, fat, total carbs, and fiber, then require review
 before adding the diary entry or saving a custom food.
 
-Never place USDA, Gemini, or other API keys directly in source control. Use
+Never place Gemini or other API keys directly in source control. Use
 ignored local environment files for development and Cloudflare secrets for
 production.
 

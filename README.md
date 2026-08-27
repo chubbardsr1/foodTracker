@@ -1,12 +1,12 @@
 # Daily Food Tracker
 
 Mobile-first food diary for recording meals and tracking calories, protein,
-fat, total carbohydrates, fiber, and net carbohydrates.
+fat, saturated fat, trans fat, monounsaturated fat, polyunsaturated fat,
+total carbohydrates, fiber, and net carbohydrates.
 
 ## Current features
 
 - Separate breakfast, lunch, dinner, and snack entries
-- USDA FoodData Central search
 - Manual nutrition-label entry
 - Saved custom foods, chosen from a searchable type-ahead list on the
   Add Food form
@@ -14,6 +14,10 @@ fat, total carbohydrates, fiber, and net carbohydrates.
   barcode entry when a camera is unavailable
 - Gemini meal assistant that estimates nutrition from a typed or dictated
   meal description
+- Fat breakdown: saturated, trans, monounsaturated, and polyunsaturated fat
+  alongside total fat, each optional and stored in grams. A value that was
+  never recorded stays unknown and is shown as "Not available", never as 0 g.
+  Tapping the Fat card on the diary opens the day's breakdown.
 - Fractional servings that scale the recorded nutrition
 - Editable calorie and macro goals
 - Per-profile water shortcut buttons plus a custom-ounce option
@@ -40,6 +44,10 @@ fat, total carbohydrates, fiber, and net carbohydrates.
 
 ## Sections
 
+Tapping the Nourish logo and title in the header reloads the page, for when
+Safari keeps showing a stale view of something just saved. It stays on the
+same address and works from the keyboard.
+
 The application has six sections, selected from the navigation under the
 header:
 
@@ -51,13 +59,16 @@ header:
   recorded; each entry keeps its own nutrition snapshot. Deleting asks for
   confirmation, names the food, and frees any barcode it held.
 - **Calendar** - a month at a glance. Each day is coloured by how its
-  calories compared with that day's goal, with a dot showing whether any
-  movement was recorded.
+  calories compared with that day's goal, and lists that day's calories,
+  exercise minutes, and steps, with a dot showing whether any movement was
+  recorded.
 - **Reports** - calories, movement, and steps recorded over a date range,
   followed by a movement log listing each recorded activity with its
   comments.
-  The range defaults to the last seven calendar days including today, and a
-  custom start and end date can be chosen. Dates with no entries are listed
+  The Last 7, 14, and 30 day presets cover completed days only, ending
+  yesterday, so a day still in progress never drags the averages down. The
+  range defaults to the last seven completed days, and a custom start and end
+  date can be chosen, which may include today. Dates with no entries are listed
   with zero values; a date with no step entry shows a dash rather than a
   zero, so "not recorded" never reads as a zero-step day. This page also
   carries the complete export.
@@ -82,7 +93,11 @@ from one shared component, so every export comes from the same data. The
 Weight page exports weight readings, the Journal page exports written
 entries, and the Reports page exports everything.
 
-Choose a start date, an end date, and which sections to include. Every
+Choose a start date, an end date, and which sections to include. The
+presets - 7 days, 30 days, 3 months, 6 months, This year, and All recorded -
+all end on the last completed day, yesterday, and so does the range the panel
+opens with. Today is still in progress, so it is left out of anything a
+button picks; a start and end typed in by hand may still include today. Every
 section offered on a page starts ticked and can be turned off on its own.
 The available sections are weight entries, journal entries, daily nutrition
 totals, individual food entries, water, exercise and movement, exercise
@@ -158,6 +173,12 @@ that day's calories compared with the goal that applied **on that day**:
 - yellow - over the goal
 - red - over the goal by more than 500 calories
 - neutral grey - nothing logged that day
+
+Under the day number, a day with anything recorded lists its totals: calories
+eaten, exercise minutes, and steps, such as `1,982 Cal`, `95 min`, and
+`8,101 steps`. Minutes are added up across every session recorded that day;
+steps are the single daily total, so they are never counted twice. A day with
+nothing recorded shows only its number.
 
 A dot in each day shows movement: green when exercise was recorded, grey when
 none was. Tapping a day shows the calories, the goal that applied, how far
@@ -318,7 +339,6 @@ free, open service: no key, account, or payment is involved.
 - Vinext/Next-compatible application routes
 - Cloudflare Workers and D1
 - Drizzle ORM
-- USDA FoodData Central API
 - Open Food Facts product API
 - Google Gemini Developer API (`gemini-3.1-flash-lite`)
 
@@ -359,5 +379,5 @@ people receive separate diaries.
 - Weight trend chart and goal weight
 - Nutrition-label photo scanning
 
-Do not place private USDA or AI API keys directly in source files. Keys belong
+Do not place private AI or other API keys directly in source files. Keys belong
 in `.dev.vars` locally and in Cloudflare secrets in production.

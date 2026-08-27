@@ -2,16 +2,16 @@
 | ------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Browser-based site instead of an iPhone app | Complete | Runs as a website and can be opened from an iPhone browser.                                                                                                    |
 | No Python server                            | Complete | Uses React/Vinext with Cloudflare Workers and D1.                                                                                                              |
-| Free hosting and services                   | Complete | Cloudflare Workers, D1, Zero Trust Free, and the USDA food API are being used at $0 per month.                                                                 |
+| Free hosting and services                   | Complete | Cloudflare Workers, D1, Zero Trust Free, Open Food Facts, and the Gemini free tier are being used at $0 per month.                                             |
 | No monthly hosting charge                   | Complete | The current services are on free plans. Cloudflare Zero Trust required a payment method but currently costs $0 per month.                                      |
 | Daily food diary                            | Complete | Food can be entered under Breakfast, Lunch, Dinner, and Snacks.                                                                                                |
-| Nutrition details automatically supplied    | Partial  | USDA search and barcode scanning supply calories, protein, fat, carbs, and fiber. Packaged products use their label serving when Open Food Facts has one.      |
+| Nutrition details automatically supplied    | Partial  | Barcode scanning and the Gemini meal assistant supply calories, protein, total fat, the four fat subtypes, carbs, and fiber. Packaged products use their label serving when Open Food Facts has one. |
 | AI-assisted food entry                      | Complete | The Add Food form takes a typed or dictated meal description and asks Google Gemini for a nutrition estimate, which is reviewed and edited before it is added. |
 | Manually enter foods                        | Complete | You can enter all nutrition values yourself.                                                                                                                   |
 | Remember custom foods                       | Complete | Manually entered foods can be saved under “My Foods” and reused. The Add Food form filters them with a searchable type-ahead list.                             |
 | Daily calorie tracking                      | Complete | Main screen shows consumed calories, goal, remaining calories, and over-goal status. The Calendar scores each day against the goal saved for that day.         |
 | Net-carbohydrate tracking                   | Complete | Calculated as total carbohydrates minus fiber.                                                                                                                 |
-| Protein and fat tracking                    | Complete | Both appear in daily progress totals.                                                                                                                          |
+| Protein and fat tracking                    | Complete | Both appear in daily progress totals. Tapping the Fat card opens the day's saturated, trans, monounsaturated, and polyunsaturated breakdown; a subtype nothing recorded reads "Not available", never 0 g. |
 | Fiber tracking                              | Complete | Fiber is stored with food entries and shown on the main screen with a customizable daily goal.                                                                 |
 | Multiple people—Chris and Sarah             | Complete | Each profile has separate food, goals, water, and saved foods.                                                                                                 |
 | Lightweight security                        | Complete | Cloudflare Access permits only Chris’s and Sarah’s authorized email addresses.                                                                                 |
@@ -56,8 +56,9 @@
   automatically is still to come.
 
 - Reports: a Reports section now shows calories consumed, recorded movement,
-  and steps for a chosen date range, defaulting to the last seven calendar
-  days including today. It lists every date in the range, including days with
+  and steps for a chosen date range, defaulting to the last seven completed
+  calendar days ending yesterday. The presets cover completed days only; a
+  custom range may include today. It lists every date in the range, including days with
   no entries, and keeps Chris's and Sarah's data separate.
 
 - Steps: the Diary records one manually entered step total per person per
@@ -110,11 +111,19 @@ Target snapshot: Keep the goals used for each day so later goal changes do not r
 
 The major unfinished pieces are:
 
-1. Improve USDA serving-size selection and nutrition scaling.
-2. Optionally add a dedicated Drinks category rather than entering caloric drinks as food.
-3. Chat-assisted daily recap that reads the day and writes the Journal entry.
-4. Goal weight and milestones on the Weight page.
+1. Optionally add a dedicated Drinks category rather than entering caloric drinks as food.
+2. Chat-assisted daily recap that reads the day and writes the Journal entry.
+3. Goal weight and milestones on the Weight page.
 
 Every item from the original vision is now in place. Food can be added by
-hand, from a saved food, from USDA search, from a scanned barcode, or from an
-AI estimate of a described meal.
+hand, from a saved food, from a scanned barcode, or from an AI estimate of a
+described meal. USDA food search was removed at Chris's request; it was not
+being used.
+
+- Fat breakdown: saturated, trans, monounsaturated, and polyunsaturated fat
+  are stored in grams beside total fat on every diary entry and saved food.
+  All four are optional and nullable: a value a label, product record, or
+  estimate never gave stays unknown rather than becoming a zero, and the four
+  are never forced to add up to total fat. They scale with servings, appear
+  on the diary Fat card's popup, in Reports, in both PDFs, and in the copied
+  daily summary. There is no goal for any subtype, by design.

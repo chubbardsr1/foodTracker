@@ -1,6 +1,7 @@
 import { and, asc, eq, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { exerciseEntries, foodEntries, stepEntries } from "../../../db/schema";
+import { type FatTotals, emptyFatTotals, fatTotalsFrom, mergeFatTotals } from "../../nutrition";
 import { profileFrom } from "../profile";
 
 const MAX_DAYS = 366;
@@ -37,6 +38,17 @@ export async function GET(request: Request) {
         fat: sql<number>`sum(${foodEntries.fat})`,
         carbs: sql<number>`sum(${foodEntries.carbs})`,
         fiber: sql<number>`sum(${foodEntries.fiber})`,
+        // Fat subtypes total their known values, with a count of the entries
+        // that supplied each one. sum() ignores nulls, so without the counts a
+        // day where nobody recorded a subtype would look like a day of zeroes.
+        saturatedFat: sql<number | null>`sum(${foodEntries.saturatedFat})`,
+        saturatedFatKnown: sql<number>`sum(case when ${foodEntries.saturatedFat} is null then 0 else 1 end)`,
+        transFat: sql<number | null>`sum(${foodEntries.transFat})`,
+        transFatKnown: sql<number>`sum(case when ${foodEntries.transFat} is null then 0 else 1 end)`,
+        monounsaturatedFat: sql<number | null>`sum(${foodEntries.monounsaturatedFat})`,
+        monounsaturatedFatKnown: sql<number>`sum(case when ${foodEntries.monounsaturatedFat} is null then 0 else 1 end)`,
+        polyunsaturatedFat: sql<number | null>`sum(${foodEntries.polyunsaturatedFat})`,
+        polyunsaturatedFatKnown: sql<number>`sum(case when ${foodEntries.polyunsaturatedFat} is null then 0 else 1 end)`,
         items: sql<number>`count(*)`,
       }).from(foodEntries)
         .where(and(eq(foodEntries.owner, owner), gte(foodEntries.eatenOn, start), lte(foodEntries.eatenOn, end)))
@@ -81,6 +93,14 @@ export async function GET(request: Request) {
         carbs: roundTwo(food?.carbs ?? 0), fiber: roundTwo(food?.fiber ?? 0),
         netCarbs: Math.max(0, roundTwo(Number(food?.carbs ?? 0) - Number(food?.fiber ?? 0))),
         items: Number(food?.items ?? 0),
+        // The same rollup shape the diary screen and both PDFs use, so a day's
+        // fat breakdown is never worked out two different ways.
+        fatDetail: food
+          ? fatTotalsFrom(food.fat, food.items, food, {
+              saturatedFat: food.saturatedFatKnown, transFat: food.transFatKnown,
+              monounsaturatedFat: food.monounsaturatedFatKnown, polyunsaturatedFat: food.polyunsaturatedFatKnown,
+            })
+          : emptyFatTotals(),
         exerciseMinutes: roundTwo(movement?.minutes ?? 0), exerciseCalories: roundTwo(movement?.calories ?? 0),
         sessions: Number(movement?.sessions ?? 0), activities: movement?.activities ?? "",
         movement: sessionsByDate.get(date) ?? [],
@@ -97,6 +117,9 @@ export async function GET(request: Request) {
       steps: days.reduce((sum, day) => sum + (day.steps ?? 0), 0),
       daysInRange: days.length, daysWithFood, daysWithExercise: days.filter(day => day.sessions > 0).length,
       daysWithSteps: days.filter(day => day.steps !== null).length,
+      // Range-wide fat, built by merging the per-day rollups rather than by
+      // running a second, separate query that could disagree with them.
+      fatDetail: days.reduce<FatTotals>((sum, day) => mergeFatTotals(sum, day.fatDetail), emptyFatTotals()),
     };
     const averages = {
       caloriesPerDay: roundTwo(totals.calories / days.length),

@@ -4,6 +4,7 @@
  * The Weight, Journal, and Reports screens all export through this module, so
  * a PDF and a JSON file taken from the same range hold exactly the same rows.
  */
+import type { FatBreakdown, FatSubtype } from "./nutrition";
 import type { Profile } from "./shared";
 
 export const exportSections = [
@@ -36,8 +37,14 @@ export type ExportPayload = {
   };
   weights?: { date: string; pounds: number; note: string }[];
   journalEntries?: { date: string; body: string; source: string; updatedAt: string }[];
-  dailySummaries?: { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; foodItems: number }[];
-  foodEntries?: { date: string; meal: string; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number }[];
+  /**
+   * `fat` is the day's total fat. The four subtypes sum only the entries that
+   * recorded them and are null when none did, so `fatSubtypeEntries` reports
+   * how many of the day's `foodItems` each sum actually covers.
+   */
+  dailySummaries?: ({ date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; foodItems: number; fatSubtypeEntries: Record<FatSubtype, number> } & FatBreakdown)[];
+  /** Per-entry fat subtypes, null on anything logged before the breakdown existed. */
+  foodEntries?: ({ date: string; meal: string; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number } & FatBreakdown)[];
   waterEntries?: { date: string; ounces: number }[];
   exerciseEntries?: { date: string; activity: string; minutes: number; caloriesBurned?: number; comments?: string }[];
   exerciseCalories?: { date: string; caloriesBurned: number; minutes: number; sessions: number }[];

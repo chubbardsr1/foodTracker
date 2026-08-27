@@ -7,6 +7,8 @@
  */
 import type { jsPDF } from "jspdf";
 import type { ExportPayload, ExportSection } from "./export-shared";
+import { type DailyNutrition, dailyNutrition } from "./export-summary";
+import { UNKNOWN_FAT_LABEL, fatSubtypeKeys, fatSubtypeShortLabels } from "./nutrition";
 import { amount, mediumDate, whole } from "./shared";
 
 const PAGE_WIDTH = 612;
@@ -136,6 +138,57 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
 
   function emptySection() { paragraph("No entries recorded in this date range.", 9, MUTED, "italic"); }
 
+  /**
+   * Total fat with its four subtypes, one row per day, printed beneath the
+   * daily totals rather than squeezed into them: eleven columns on a letter
+   * page would leave every heading truncated.
+   *
+   * A subtype nothing recorded prints "Not available", never 0 g. A sum that
+   * covers only some of the day's entries is starred, so a partial figure is
+   * never read as the whole day.
+   */
+  function fatBreakdownTable(days: DailyNutrition[]) {
+    if (days.length === 0) return;
+    ensure(60);
+    y += 4;
+    font(10, "bold", INK);
+    doc.text("Fat breakdown", MARGIN, y);
+    y += 14;
+    paragraph(
+      "Grams per day. Subtypes are not expected to add up to total fat: labels omit some subtypes, round each line "
+      + "separately, and leave other fat components unreported. A starred figure covers only the entries for that day "
+      + "that recorded it.",
+      8.5,
+    );
+    let partial = false;
+    const rows = days.map(day => {
+      const detail = day.fatDetail;
+      return [
+        mediumDate(day.date),
+        amount(detail.total),
+        ...fatSubtypeKeys.map(key => {
+          const value = detail.subtotals[key];
+          if (value === null) return UNKNOWN_FAT_LABEL;
+          const incomplete = detail.missing[key] > 0;
+          if (incomplete) partial = true;
+          return `${amount(value)}${incomplete ? " *" : ""}`;
+        }),
+      ];
+    });
+    table(
+      [
+        { header: "Date", width: 84 },
+        { header: "Total fat", width: 66, align: "right" },
+        { header: fatSubtypeShortLabels.saturatedFat, width: 90, align: "right" },
+        { header: fatSubtypeShortLabels.transFat, width: 90, align: "right" },
+        { header: "Monounsat.", width: 93, align: "right" },
+        { header: "Polyunsat.", width: 93, align: "right" },
+      ],
+      rows,
+    );
+    if (partial) paragraph("* Covers only some of that day's food entries, so the real total is higher.", 8.5);
+  }
+
   // ---- Cover block -------------------------------------------------------
   font(20, "bold");
   doc.text("Health export", MARGIN, y + 6);
@@ -236,6 +289,7 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
             amount(row.carbs), amount(row.fiber), amount(row.netCarbs), String(row.foodItems),
           ]),
         );
+        fatBreakdownTable(dailyNutrition(data));
         break;
       }
       case "foodEntries": {
@@ -257,6 +311,9 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
             amount(row.calories), amount(row.protein), amount(row.fat), amount(row.netCarbs),
           ]),
         );
+        // The daily totals section already prints this when it travelled, so it
+        // is only added here when the individual entries came on their own.
+        if (!chosen.has("dailySummaries")) fatBreakdownTable(dailyNutrition(data));
         break;
       }
       case "waterEntries": {

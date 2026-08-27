@@ -7,7 +7,7 @@
  */
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { dailyGoals, exerciseEntries, foodEntries, nutritionGoals } from "../../../db/schema";
+import { dailyGoals, exerciseEntries, foodEntries, nutritionGoals, stepEntries } from "../../../db/schema";
 import { DEFAULT_CALORIE_GOAL, OVER_BUDGET_LIMIT } from "../daily-goal";
 import { profileFrom } from "../profile";
 
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
     const { first, last, days: dayCount } = monthRange(month);
     const db = getDb(); const owner = profileFrom(request);
 
-    const [foodRows, exerciseRows, stamps, currentRows] = await Promise.all([
+    const [foodRows, exerciseRows, stepRows, stamps, currentRows] = await Promise.all([
       db.select({
         date: foodEntries.eatenOn,
         calories: sql<number>`sum(${foodEntries.calories})`,
@@ -56,6 +56,10 @@ export async function GET(request: Request) {
       }).from(exerciseEntries)
         .where(and(eq(exerciseEntries.owner, owner), gte(exerciseEntries.exercisedOn, first), lte(exerciseEntries.exercisedOn, last)))
         .groupBy(exerciseEntries.exercisedOn),
+      // Steps are stored as one total per owner per day, so this reads the row
+      // as it stands. Summing it would double a day that is corrected later.
+      db.select({ date: stepEntries.steppedOn, steps: stepEntries.steps }).from(stepEntries)
+        .where(and(eq(stepEntries.owner, owner), gte(stepEntries.steppedOn, first), lte(stepEntries.steppedOn, last))),
       db.select({ date: dailyGoals.goalOn, calories: dailyGoals.calories }).from(dailyGoals)
         .where(and(eq(dailyGoals.owner, owner), gte(dailyGoals.goalOn, first), lte(dailyGoals.goalOn, last))),
       db.select({ calories: nutritionGoals.calories }).from(nutritionGoals).where(eq(nutritionGoals.owner, owner)).limit(1),
@@ -64,6 +68,7 @@ export async function GET(request: Request) {
     const currentGoal = currentRows[0]?.calories ?? DEFAULT_CALORIE_GOAL;
     const foodByDate = new Map(foodRows.map(row => [row.date, row]));
     const exerciseByDate = new Map(exerciseRows.map(row => [row.date, row]));
+    const stepsByDate = new Map(stepRows.map(row => [row.date, Number(row.steps ?? 0)]));
     const stampByDate = new Map(stamps.map(row => [row.date, row.calories]));
 
     const days = Array.from({ length: dayCount }, (_, index) => {
@@ -74,6 +79,7 @@ export async function GET(request: Request) {
       const stamped = stampByDate.get(date);
       const goalCalories = stamped ?? currentGoal;
       const sessions = Number(movement?.sessions ?? 0);
+      const steps = stepsByDate.get(date) ?? 0;
       return {
         date,
         calories, items,
@@ -85,8 +91,9 @@ export async function GET(request: Request) {
         exerciseCalories: roundTwo(movement?.calories ?? 0),
         sessions,
         activities: movement?.activities ?? "",
+        steps,
         hasMovement: sessions > 0,
-        hasData: items > 0 || sessions > 0,
+        hasData: items > 0 || sessions > 0 || steps > 0,
       };
     });
 

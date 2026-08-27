@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { type Profile, addDays, addMonths, localDate, mediumDate } from "./shared";
+import { type Profile, addMonths, lastCompleteDate, lastCompleteDays, mediumDate } from "./shared";
 import {
   type ExportSection, copyText, exportFileName, fetchExport, isEmptyExport,
   saveBlob, sectionLabels, summaryFileName,
@@ -33,10 +33,10 @@ type Job = "" | "pdf" | "json" | "copy" | "summary";
  * API as text, so nothing shifts a day when it crosses UTC midnight.
  */
 export default function ExportPanel({ profile, eyebrow, title, help, sections, earliest, summary = false }: Props) {
-  const today = localDate();
+  const initial = lastCompleteDays(30);
   const [open, setOpen] = useState(false);
-  const [start, setStart] = useState(addDays(today, -29));
-  const [end, setEnd] = useState(today);
+  const [start, setStart] = useState(initial.start);
+  const [end, setEnd] = useState(initial.end);
   const [chosen, setChosen] = useState<ExportSection[]>(sections);
   const [busy, setBusy] = useState<Job>("");
   const [error, setError] = useState("");
@@ -60,6 +60,15 @@ export default function ExportPanel({ profile, eyebrow, title, help, sections, e
     setNotice(""); setError("");
     setStart(from); setEnd(to);
   }
+
+  // Every preset reads the clock when it is clicked rather than reusing a
+  // render-time value, so a panel left open overnight still ends on the day
+  // that has just finished. None of them ever reaches today.
+  function applyLastDays(count: number) { const range = lastCompleteDays(count); applyRange(range.start, range.end); }
+  function applyLastMonths(months: number) { const to = lastCompleteDate(); applyRange(addMonths(to, -months), to); }
+  function applyThisYear() { const to = lastCompleteDate(); applyRange(`${to.slice(0, 4)}-01-01`, to); }
+  /** Everything recorded, still stopping at the last completed day. */
+  function applyAllRecorded(from: string) { const to = lastCompleteDate(); applyRange(from < to ? from : to, to); }
 
   async function run(job: Exclude<Job, "">) {
     setBusy(job); setError(""); setNotice("");
@@ -116,12 +125,12 @@ export default function ExportPanel({ profile, eyebrow, title, help, sections, e
         <label>End<input type="date" value={end} onChange={event => applyRange(start, event.target.value)} /></label>
       </div>
       <div className="export-presets">
-        <button type="button" onClick={() => applyRange(addDays(today, -6), today)}>7 days</button>
-        <button type="button" onClick={() => applyRange(addDays(today, -29), today)}>30 days</button>
-        <button type="button" onClick={() => applyRange(addMonths(today, -3), today)}>3 months</button>
-        <button type="button" onClick={() => applyRange(addMonths(today, -6), today)}>6 months</button>
-        <button type="button" onClick={() => applyRange(`${today.slice(0, 4)}-01-01`, today)}>This year</button>
-        {earliest && <button type="button" onClick={() => applyRange(earliest, today)}>All recorded</button>}
+        <button type="button" onClick={() => applyLastDays(7)}>7 days</button>
+        <button type="button" onClick={() => applyLastDays(30)}>30 days</button>
+        <button type="button" onClick={() => applyLastMonths(3)}>3 months</button>
+        <button type="button" onClick={() => applyLastMonths(6)}>6 months</button>
+        <button type="button" onClick={() => applyThisYear()}>This year</button>
+        {earliest && <button type="button" onClick={() => applyAllRecorded(earliest)}>All recorded</button>}
       </div>
 
       <fieldset className="export-sections">
