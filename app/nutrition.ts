@@ -304,3 +304,335 @@ export function fatCoverageNote(totals: FatTotals, noun = "food entries") {
   if (absent.length > 0) parts.push(`no ${listWords(absent)} recorded at all`);
   return `Subtype sums cover only the ${noun} that recorded each value, so they understate the true amount: ${parts.join("; ")}.`;
 }
+
+/* -------------------------------------------------------------------------
+ * Calorie shares and goal percentages
+ *
+ * Two different ideas live here and are never mixed:
+ *
+ *   1. Percentage OF CALORIES - what share of an amount of energy a macro
+ *      accounts for, using the standard 4/4/9 factors.
+ *   2. Percentage OF A GOAL - how much of a configured target has been
+ *      reached. This has nothing to do with calories.
+ *
+ * Settings, the reports screen, and both PDFs all call the helpers below
+ * rather than repeating the arithmetic, so their wording cannot drift apart.
+ *
+ * Percentages are not expected to add up to 100. Label calories are rounded,
+ * fiber, sugar alcohols, and organic acids carry energy the 4/4/9 factors do
+ * not model, and estimated foods are approximate. Nothing here ever adjusts a
+ * stored calorie or gram value to force the total to balance.
+ * ---------------------------------------------------------------------- */
+
+/** The standard macro calorie equivalents this application uses. */
+export const caloriesPerGram = { protein: 4, carbs: 4, fat: 9 } as const;
+
+/** The calories a number of grams of a macro accounts for. Null in, null out. */
+export function macroCalories(grams: number | null | undefined, perGram: number): number | null {
+  const value = grams === null || grams === undefined ? null : Number(grams);
+  if (value === null || !Number.isFinite(value) || value < 0) return null;
+  if (!Number.isFinite(perGram) || perGram <= 0) return null;
+  return value * perGram;
+}
+
+/**
+ * The share of `calories` that `grams` of a macro accounts for.
+ *
+ * Returns null rather than a number whenever the answer would be meaningless:
+ * a blank or invalid gram figure, or zero, missing, or invalid calories. That
+ * is what keeps `NaN` and `Infinity` off the screen.
+ */
+export function caloriePercent(
+  grams: number | null | undefined,
+  calories: number | null | undefined,
+  perGram: number,
+): number | null {
+  const fromMacro = macroCalories(grams, perGram);
+  const total = calories === null || calories === undefined ? null : Number(calories);
+  if (fromMacro === null || total === null || !Number.isFinite(total) || total <= 0) return null;
+  return Math.round(fromMacro / total * 1000) / 10;
+}
+
+/**
+ * One value as a percentage of another: saturated fat within total fat, or an
+ * amount against the goal configured for it. Never a calorie calculation.
+ */
+export function percentOf(part: number | null | undefined, whole: number | null | undefined): number | null {
+  const value = part === null || part === undefined ? null : Number(part);
+  const total = whole === null || whole === undefined ? null : Number(whole);
+  if (value === null || !Number.isFinite(value) || value < 0) return null;
+  if (total === null || !Number.isFinite(total) || total <= 0) return null;
+  return Math.round(value / total * 1000) / 10;
+}
+
+/** "23.8%", always to one decimal place, or the fallback when unavailable. */
+export function formatPercent(value: number | null, fallback = "—") {
+  return value === null ? fallback : `${value.toFixed(1)}%`;
+}
+
+/** Grams to one decimal place, or "Not available" when nothing recorded it. */
+export function formatGrams(value: number | null, fallback = UNKNOWN_FAT_LABEL) {
+  return value === null ? fallback : `${(Math.round(value * 10) / 10).toFixed(1)} g`;
+}
+
+/**
+ * The configured daily goals a percentage can be worked out against.
+ *
+ * `saturatedFat` is optional and nullable: it is the one goal that may simply
+ * not be set, and an unset goal produces no percentage rather than a zero.
+ * There is deliberately no total-carbohydrate goal.
+ */
+export type GoalValues = {
+  calories: number | null;
+  protein: number | null;
+  fat: number | null;
+  netCarbs: number | null;
+  fiber: number | null;
+  saturatedFat: number | null;
+  waterOunces?: number | null;
+};
+
+export const goalKeys = ["calories", "netCarbs", "protein", "fat", "saturatedFat", "fiber", "waterOunces"] as const;
+export type GoalKey = typeof goalKeys[number];
+
+export const goalLabels: Record<GoalKey, string> = {
+  calories: "Calories",
+  netCarbs: "Net carbs (g)",
+  protein: "Protein (g)",
+  fat: "Total fat (g)",
+  saturatedFat: "Saturated fat (g)",
+  fiber: "Fiber (g)",
+  waterOunces: "Water (oz)",
+};
+
+/**
+ * The percentage note shown beside each configured goal, worded once here.
+ *
+ * Net carbs are called a calorie-equivalent rather than "the carbohydrate
+ * share of calories": net carbs exclude fiber, so they are not the whole
+ * carbohydrate story, and the application has no total-carbohydrate goal to
+ * compare against. Fiber gets no calorie percentage at all - it is tracked as
+ * a gram goal and reported as a percentage of that goal.
+ *
+ * A blank, zero, or invalid entry produces an empty string, so a half-typed
+ * number never shows as NaN.
+ */
+export function goalContext(goals: Partial<GoalValues>): Record<GoalKey, string> {
+  const calories = goals.calories ?? null;
+  const protein = caloriePercent(goals.protein, calories, caloriesPerGram.protein);
+  const netCarbs = caloriePercent(goals.netCarbs, calories, caloriesPerGram.carbs);
+  const fat = caloriePercent(goals.fat, calories, caloriesPerGram.fat);
+  const saturated = caloriePercent(goals.saturatedFat, calories, caloriesPerGram.fat);
+  const saturatedShare = percentOf(goals.saturatedFat ?? null, goals.fat ?? null);
+  const saturatedParts = [
+    saturated === null ? "" : `${formatPercent(saturated)} of calories`,
+    saturatedShare === null ? "" : `${formatPercent(saturatedShare)} of total fat`,
+  ].filter(Boolean);
+  return {
+    calories: "",
+    netCarbs: netCarbs === null ? "" : `${formatPercent(netCarbs)} calorie-equivalent`,
+    protein: protein === null ? "" : `${formatPercent(protein)} of calories`,
+    fat: fat === null ? "" : `${formatPercent(fat)} of calories`,
+    saturatedFat: saturatedParts.join(" · "),
+    fiber: "gram goal",
+    waterOunces: "",
+  };
+}
+
+/** One printable row of the current goals and what they work out to. */
+export type GoalRow = { key: GoalKey; label: string; target: string; context: string };
+
+/**
+ * The configured goals as rows, for the goals tables in both PDFs. An unset
+ * goal says so instead of printing a zero.
+ */
+export function goalRows(goals: Partial<GoalValues>): GoalRow[] {
+  const context = goalContext(goals);
+  const target = (key: GoalKey) => {
+    const value = goals[key];
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return "not set";
+    if (key === "calories") return `${Math.round(Number(value)).toLocaleString("en-US")} per day`;
+    if (key === "waterOunces") return `${Math.round(Number(value) * 100) / 100} oz`;
+    return `${Math.round(Number(value) * 100) / 100} g`;
+  };
+  return goalKeys.map(key => ({ key, label: goalLabels[key], target: target(key), context: context[key] }));
+}
+
+/** Average grams per recorded day, as the reports and PDFs work them out. */
+export type NutritionAverages = {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number;
+  netCarbs: number;
+};
+
+/**
+ * One row of the nutrition averages table.
+ *
+ * The three pieces of context are kept apart as well as joined, because a
+ * printed table column has far less room than the screen. A PDF prints the
+ * calorie share and the goal context and leaves the coverage note to the
+ * paragraph beneath; the screen shows all three.
+ */
+export type NutritionRow = {
+  key: string;
+  metric: string;
+  /** True for the fat subtypes, which are shown indented under total fat. */
+  nested?: boolean;
+  average: string;
+  goal: string;
+  /** "28.7% of average calories", or "" when it cannot be worked out. */
+  calorieShare: string;
+  /** "98.0% of goal", or the saturated-fat row's two goal comparisons. */
+  goalContext: string;
+  /** "from 2 of 3 days" when a subtype average covers only part of the range. */
+  coverage: string;
+  /** All three joined, for a surface with room for one column. */
+  context: string;
+};
+
+/**
+ * The nutrition averages table, built once for the reports screen, the
+ * detailed export PDF, and the doctor summary PDF.
+ *
+ * The rules live here rather than in three places:
+ *  - Calorie shares use TOTAL carbohydrates, never net carbohydrates.
+ *  - Net carbohydrates keep their own row, labelled a calorie-equivalent.
+ *  - Total carbohydrates are always shown, and never gain a goal.
+ *  - Fiber is a percentage of its gram goal, never a percentage of calories.
+ *  - Saturated fat reports its calorie share and its share of the total fat
+ *    actually eaten, each labelled for exactly what it is.
+ *  - A fat subtype nothing recorded reads "Not available", never 0 g, and says
+ *    how many days it covers when the record is partial.
+ */
+export function nutritionRows(input: {
+  averages: NutritionAverages;
+  /** The range's fat rollup, for the subtype sums and their coverage. */
+  fat: FatTotals;
+  /** Days holding at least one food entry: the only divisor used. */
+  recordedDays: number;
+  goals: Partial<GoalValues> | null;
+  /** Days each subtype was actually recorded on, for the coverage note. */
+  subtypeDays?: Partial<Record<FatSubtype, number>>;
+}): NutritionRow[] {
+  const { averages, fat, recordedDays, goals } = input;
+  const calories = averages.calories;
+  const share = (grams: number | null, perGram: number, wording = "of average calories") => {
+    const percent = caloriePercent(grams, calories, perGram);
+    return percent === null ? "" : `${formatPercent(percent)} ${wording}`;
+  };
+  const against = (value: number | null, goal: number | null | undefined, wording = "of goal") => {
+    const percent = percentOf(value, goal ?? null);
+    return percent === null ? "" : `${formatPercent(percent)} ${wording}`;
+  };
+  const join = (...parts: string[]) => parts.filter(Boolean).join(" · ");
+  const goalGrams = (value: number | null | undefined) =>
+    value === null || value === undefined || !Number.isFinite(Number(value))
+      ? "no goal"
+      : `${Math.round(Number(value) * 100) / 100} g`;
+  const perDay = (subtotal: number | null) =>
+    subtotal === null || recordedDays <= 0 ? null : subtotal / recordedDays;
+
+  /** Assembles one row, joining the pieces for the single-column surfaces. */
+  const build = (row: Omit<NutritionRow, "context" | "calorieShare" | "goalContext" | "coverage">
+    & { calorieShare?: string; goalContext?: string; coverage?: string }): NutritionRow => {
+    const calorieShare = row.calorieShare ?? "";
+    const goalContext = row.goalContext ?? "";
+    const coverage = row.coverage ?? "";
+    return { ...row, calorieShare, goalContext, coverage, context: join(calorieShare, goalContext, coverage) };
+  };
+
+  const rows: NutritionRow[] = [
+    build({
+      key: "calories",
+      metric: "Calories",
+      average: Math.round(calories).toLocaleString("en-US"),
+      goal: goals?.calories ? Math.round(goals.calories).toLocaleString("en-US") : "no goal",
+      goalContext: against(calories, goals?.calories),
+    }),
+    build({
+      key: "protein",
+      metric: "Protein",
+      average: formatGrams(averages.protein),
+      goal: goalGrams(goals?.protein),
+      calorieShare: share(averages.protein, caloriesPerGram.protein),
+      goalContext: against(averages.protein, goals?.protein),
+    }),
+    build({
+      key: "carbs",
+      metric: "Total carbohydrates",
+      average: formatGrams(averages.carbs),
+      // Deliberately no goal: the tracker sets a net-carb target only.
+      goal: "no goal",
+      calorieShare: share(averages.carbs, caloriesPerGram.carbs),
+    }),
+    build({
+      key: "netCarbs",
+      metric: "Net carbohydrates",
+      average: formatGrams(averages.netCarbs),
+      goal: goalGrams(goals?.netCarbs),
+      // Labelled a calorie-equivalent, never the carbohydrate share of calories.
+      calorieShare: share(averages.netCarbs, caloriesPerGram.carbs, "calorie-equivalent"),
+      goalContext: against(averages.netCarbs, goals?.netCarbs),
+    }),
+    build({
+      key: "fiber",
+      metric: "Fiber",
+      average: formatGrams(averages.fiber),
+      goal: goalGrams(goals?.fiber),
+      // A gram goal, never a share of calories.
+      goalContext: against(averages.fiber, goals?.fiber),
+    }),
+    build({
+      key: "fat",
+      metric: "Total fat",
+      average: formatGrams(averages.fat),
+      goal: goalGrams(goals?.fat),
+      calorieShare: share(averages.fat, caloriesPerGram.fat),
+      goalContext: against(averages.fat, goals?.fat),
+    }),
+  ];
+
+  for (const key of fatSubtypeKeys) {
+    const average = perDay(fat.subtotals[key]);
+    const days = input.subtypeDays?.[key];
+    const coverage = average === null || days === undefined || days >= recordedDays || recordedDays <= 0
+      ? ""
+      : `from ${days} of ${recordedDays} days`;
+    rows.push(build({
+      key,
+      metric: fatSubtypeLabels[key],
+      nested: true,
+      average: formatGrams(average),
+      goal: key === "saturatedFat" ? goalGrams(goals?.saturatedFat) : "no goal",
+      calorieShare: share(average, caloriesPerGram.fat),
+      goalContext: key === "saturatedFat"
+        ? join(
+            // Against the fat actually eaten, which is what this label says.
+            against(average, averages.fat > 0 ? averages.fat : null, "of total fat eaten"),
+            against(average, goals?.saturatedFat, "of goal"),
+          )
+        : "",
+      coverage,
+    }));
+  }
+
+  return rows;
+}
+
+/**
+ * The caveat printed under any table of calorie shares. Said once, in one
+ * place, because the shares genuinely will not add to 100 and the honest
+ * explanation is the same everywhere.
+ */
+export const CALORIE_SHARE_NOTE =
+  "Calorie shares use 4 kcal per gram of protein and carbohydrate and 9 kcal per gram of fat. They are not "
+  + "expected to add up to 100%: labels round each line, fiber and sugar alcohols carry energy these factors do "
+  + "not model, and estimated foods are approximate. No stored calorie or gram value is adjusted to make them balance.";
+
+/** Said wherever goal percentages appear, because goal history is not kept. */
+export const CURRENT_GOALS_NOTE =
+  "Goal percentages are based on the currently configured calorie and nutrition goals, not on what the goals may "
+  + "have been on each date in this range.";

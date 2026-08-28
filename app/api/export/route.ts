@@ -154,6 +154,9 @@ export async function GET(request: Request) {
           ? {
               calories: saved.calories, protein: roundTwo(saved.protein), fat: roundTwo(saved.fat),
               netCarbs: roundTwo(saved.netCarbs), fiber: roundTwo(saved.fiber), waterOunces: roundTwo(saved.waterOunces),
+              // Null when no saturated-fat goal has been set. There is still
+              // deliberately no total-carbohydrate goal.
+              saturatedFat: optionalTwo(saved.saturatedFat),
             }
           : null,
         // The calorie goal frozen onto each day, so a past day keeps the target

@@ -51,7 +51,17 @@ export function createD1(database) {
           return { success: true, results: toRows(statement, params), meta: {} };
         },
         async raw() {
-          return toRows(statement, params).map(row => Object.values(row));
+          // D1's `raw()` hands back positional arrays, which is how Drizzle
+          // reads any select that joins tables sharing a column name. Asking
+          // node:sqlite for objects would collapse two `id` columns into one
+          // and silently shift every value after it, so arrays are requested
+          // directly and the statement is put back as it was.
+          statement.setReturnArrays(true);
+          try {
+            return statement.all(...params);
+          } finally {
+            statement.setReturnArrays(false);
+          }
         },
         async first(column) {
           const row = statement.get(...params) ?? null;

@@ -16,7 +16,8 @@ import type { jsPDF } from "jspdf";
 import type { ExportPayload } from "./export-shared";
 import { type Summary, buildSummary, weightChangeWords } from "./export-summary";
 import {
-  UNKNOWN_FAT_LABEL, fatCoverageNote, fatDetailComplete, fatSubtypeKeys, fatSubtypeLabels, hasFatDetail,
+  CALORIE_SHARE_NOTE, CURRENT_GOALS_NOTE, fatCoverageNote, fatDetailComplete, goalRows, hasFatDetail,
+  nutritionRows,
 } from "./nutrition";
 import { amount, mediumDate, shortDate, whole } from "./shared";
 
@@ -320,53 +321,41 @@ function writeSummary(summary: Summary, paint: Painter) {
     if (nutrition.recordedDays === 0) {
       paragraph("No food was recorded in this range, so there is nothing to average.", 9, MUTED, "italic");
     } else {
-      const goals = summary.goals;
-      const days = String(nutrition.recordedDays);
-      const rows: string[][] = [
-        ["Calories", whole(nutrition.averages.calories), goals ? whole(goals.calories) : "", days],
-        ["Protein", `${oneDecimal(nutrition.averages.protein)} g`, goals ? `${amount(goals.protein)} g` : "", days],
-        // The tracker sets a net-carb goal, never a total-carb one, so that cell
-        // says so outright rather than looking like a missing number.
-        ["Total carbs", `${oneDecimal(nutrition.averages.carbs)} g`, goals ? "no goal set" : "", days],
-        ["Fiber", `${oneDecimal(nutrition.averages.fiber)} g`, goals ? `${amount(goals.fiber)} g` : "", days],
-        ["Net carbs", `${oneDecimal(nutrition.averages.netCarbs)} g`, goals ? `${amount(goals.netCarbs)} g` : "", days],
-        ["Fat", `${oneDecimal(nutrition.averages.fat)} g`, goals ? `${amount(goals.fat)} g` : "", days],
-      ];
-      // The fat breakdown sits directly under total fat. Total fat stays the
-      // primary figure; these four are never added up to replace it, and a
-      // subtype nothing recorded reads "Not available" rather than 0.0 g. The
-      // days cell shows how many of the recorded days actually carried it.
-      for (const key of fatSubtypeKeys) {
-        const average = nutrition.fatAverages[key];
-        rows.push([
-          `- ${fatSubtypeLabels[key]}`,
-          average === null ? UNKNOWN_FAT_LABEL : `${oneDecimal(average)} g`,
-          // No subtype has a goal, exactly as total carbs has none.
-          goals ? "no goal set" : "",
-          average === null ? "-" : `${nutrition.fatSubtypeDays[key]} of ${days}`,
-        ]);
-      }
+      // Every figure in this table comes from the shared builder the reports
+      // screen and the detailed export use, so the three cannot disagree.
+      // Total carbohydrates keep their own row and never gain a goal; fiber is
+      // reported against its gram goal, never as a share of calories.
+      const rows = nutritionRows({
+        averages: nutrition.averages,
+        fat: nutrition.fat,
+        recordedDays: nutrition.recordedDays,
+        goals: summary.show.goals ? summary.goals : null,
+        subtypeDays: nutrition.fatSubtypeDays,
+      });
+      const metric = (row: { metric: string; nested?: boolean }) => row.nested ? `- ${row.metric}` : row.metric;
+      // The coverage note is left to the fat paragraph below, which names every
+      // partial subtype, so no cell has to be shortened to fit its column.
+      const printed = (row: { calorieShare: string; goalContext: string }) =>
+        [row.calorieShare, row.goalContext].filter(Boolean).join(" · ") || "-";
       if (summary.show.goals) {
-        // The goal column says whose target it is in its own header, so the
-        // reader never has to guess whether it is current or historic.
         table(
           [
-            { header: "Metric", width: 164 },
-            { header: "Average per recorded day", width: 152, align: "right" },
-            { header: "Current daily goal", width: 110, align: "right" },
-            { header: "Recorded days", width: 106, align: "right" },
+            { header: "Metric", width: 100 },
+            { header: "Avg / recorded day", width: 92, align: "right" },
+            { header: "Goal", width: 56, align: "right" },
+            { header: "Percentage or context", width: 284 },
           ],
-          rows.map(row => [row[0], row[1], row[2] === "" ? "-" : row[2], row[3]]),
+          rows.map(row => [metric(row), row.average, row.goal, printed(row)]),
         );
       } else {
         // The goal column is dropped entirely rather than left blank.
         table(
           [
-            { header: "Metric", width: 212 },
-            { header: "Average per recorded day", width: 180, align: "right" },
-            { header: "Recorded days", width: 140, align: "right" },
+            { header: "Metric", width: 120 },
+            { header: "Avg / recorded day", width: 110, align: "right" },
+            { header: "Calorie share", width: 302 },
           ],
-          rows.map(row => [row[0], row[1], row[3]]),
+          rows.map(row => [metric(row), row.average, printed(row)]),
         );
       }
       const stamped = summary.stampedCalorieGoals;
@@ -377,8 +366,11 @@ function writeSummary(summary: Summary, paint: Painter) {
           : "";
       paragraph(
         `Averages cover the ${nutrition.recordedDays} ${nutrition.recordedDays === 1 ? "day" : "days"} holding at least one food entry, `
-        + `not all ${summary.range.days} calendar days. Net carbs are total carbs less fiber.${goalNote}`,
+        + `not all ${summary.range.days} calendar days. Net carbohydrates are total carbohydrates less fiber, and are `
+        + `reported alongside total carbohydrates rather than in place of them.${goalNote}`,
       );
+      paragraph(CALORIE_SHARE_NOTE);
+      if (summary.show.goals) paragraph(CURRENT_GOALS_NOTE);
       // Said plainly, because a partial subtype sum divided by every recorded
       // day is a floor, not the patient's real intake.
       const fatDetail = nutrition.fat;
@@ -398,6 +390,26 @@ function writeSummary(summary: Summary, paint: Painter) {
         paragraph(
           "Fat breakdown: every food entry in this range recorded all four subtypes. They are still not expected to add "
           + "up to total fat, because labels round each line separately and some fat is not reported as any subtype.",
+        );
+      }
+
+      // The goals themselves, and what each one works out to against the
+      // calorie goal. Separate from the averages above: these are targets, not
+      // anything that was eaten.
+      if (summary.show.goals && summary.goals) {
+        // paragraph() and table() each keep themselves above the footer.
+        paragraph("Current daily goals and what they work out to:", 8.5, INK);
+        table(
+          [
+            { header: "Goal", width: 170 },
+            { header: "Target", width: 130, align: "right" },
+            { header: "Calorie context", width: 232 },
+          ],
+          goalRows(summary.goals).map(row => [row.label, row.target, row.context || "-"]),
+        );
+        paragraph(
+          "Fiber is a gram goal and has no calorie share. Net carbs are a calorie-equivalent, not the whole "
+          + "carbohydrate share, because they exclude fiber. There is no total-carbohydrate goal.",
         );
       }
     }

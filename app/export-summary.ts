@@ -103,6 +103,8 @@ export type JournalSummary = { entries: number; dates: number };
 export type GoalSummary = {
   calories: number; protein: number; fat: number;
   netCarbs: number; fiber: number; waterOunces: number;
+  /** Optional and nullable: null means no saturated-fat goal has been set. */
+  saturatedFat?: number | null;
 } | null;
 
 export type Summary = {

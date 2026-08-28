@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { nutritionGoals } from "../../../db/schema";
+import { readOptionalGrams } from "../../nutrition";
 import { refreshTodayGoal } from "../daily-goal";
 import { profileFrom } from "../profile";
 
@@ -18,7 +19,14 @@ export async function PUT(request: Request) {
     if (Object.values(goals).some(value => !Number.isFinite(value) || value <= 0)) return Response.json({ error: "Every goal must be greater than zero" }, { status: 400 });
     const shortcuts = { waterShortcutOne: Number(payload.waterShortcutOne), waterShortcutTwo: Number(payload.waterShortcutTwo), waterShortcutThree: Number(payload.waterShortcutThree) };
     if (Object.values(shortcuts).some(value => !validShortcut(value))) return Response.json({ error: `Water shortcuts must be positive numbers up to ${MAX_WATER_OUNCES} with no more than two decimal places` }, { status: 400 });
-    const saved = { ...goals, ...Object.fromEntries(Object.entries(shortcuts).map(([key, value]) => [key, Math.round(value * 100) / 100])) as typeof shortcuts };
+    // The one optional goal. Left blank it stays null, which means "no
+    // saturated-fat goal" rather than a goal of zero, and no percentage is
+    // worked out against it anywhere.
+    const saturated = readOptionalGrams(payload.saturatedFat);
+    if (!saturated.ok || (saturated.value !== null && saturated.value <= 0)) {
+      return Response.json({ error: "The saturated fat goal must be more than zero, or left blank for no goal" }, { status: 400 });
+    }
+    const saved = { ...goals, saturatedFat: saturated.value, ...Object.fromEntries(Object.entries(shortcuts).map(([key, value]) => [key, Math.round(value * 100) / 100])) as typeof shortcuts };
     const db = getDb(); const owner = profileFrom(request);
     const existing = await db.select({ id: nutritionGoals.id }).from(nutritionGoals).where(eq(nutritionGoals.owner, owner)).limit(1);
     if (existing[0]) await db.update(nutritionGoals).set({ ...saved, updatedAt: new Date().toISOString() }).where(eq(nutritionGoals.owner, owner));

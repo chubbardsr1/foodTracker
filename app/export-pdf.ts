@@ -7,8 +7,11 @@
  */
 import type { jsPDF } from "jspdf";
 import type { ExportPayload, ExportSection } from "./export-shared";
-import { type DailyNutrition, dailyNutrition } from "./export-summary";
-import { UNKNOWN_FAT_LABEL, fatSubtypeKeys, fatSubtypeShortLabels } from "./nutrition";
+import { type DailyNutrition, type NutritionSummary, buildSummary, dailyNutrition } from "./export-summary";
+import {
+  CALORIE_SHARE_NOTE, CURRENT_GOALS_NOTE, UNKNOWN_FAT_LABEL, fatSubtypeKeys, fatSubtypeShortLabels,
+  goalRows, nutritionRows,
+} from "./nutrition";
 import { amount, mediumDate, whole } from "./shared";
 
 const PAGE_WIDTH = 612;
@@ -56,6 +59,9 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
   const { jsPDF: JsPdf } = await import("jspdf");
   const doc = new JsPdf({ unit: "pt", format: "letter", compress: true }) as jsPDF;
   const chosen = new Set(data.exportMetadata.sections);
+  // The same rollup the doctor summary is built from, so the two documents
+  // report identical averages and calorie shares for the same range.
+  const summary = buildSummary(data);
   let y = MARGIN;
 
   function font(size: number, style: "normal" | "bold" | "italic" = "normal", colour: [number, number, number] = INK) {
@@ -189,6 +195,63 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
     if (partial) paragraph("* Covers only some of that day's food entries, so the real total is higher.", 8.5);
   }
 
+  /**
+   * Averages per recorded day with a percentage beside each metric.
+   *
+   * Two different percentages appear and are always labelled: a share of the
+   * average calories, and how much of a configured goal was reached. Fiber
+   * only ever shows the second. Total carbohydrates are always listed and
+   * never carry a goal.
+   */
+  function averagesTable(nutrition: NutritionSummary) {
+    if (nutrition.recordedDays === 0) return;
+    const withGoals = chosen.has("goals") && Boolean(summary.goals);
+    ensure(60);
+    y += 4;
+    font(10, "bold", INK);
+    doc.text("Averages and calorie shares", MARGIN, y);
+    y += 14;
+    const rows = nutritionRows({
+      averages: nutrition.averages,
+      fat: nutrition.fat,
+      recordedDays: nutrition.recordedDays,
+      goals: withGoals ? summary.goals : null,
+      subtypeDays: nutrition.fatSubtypeDays,
+    });
+    const metric = (row: { metric: string; nested?: boolean }) => row.nested ? `- ${row.metric}` : row.metric;
+    // Coverage is left to the fat breakdown table's own note above, so nothing
+    // here has to be shortened to fit.
+    const printed = (row: { calorieShare: string; goalContext: string }) =>
+      [row.calorieShare, row.goalContext].filter(Boolean).join(" · ") || "-";
+    if (withGoals) {
+      table(
+        [
+          { header: "Metric", width: 96 },
+          { header: "Avg / recorded day", width: 88, align: "right" },
+          { header: "Goal", width: 56, align: "right" },
+          { header: "Percentage or context", width: 276 },
+        ],
+        rows.map(row => [metric(row), row.average, row.goal, printed(row)]),
+      );
+    } else {
+      table(
+        [
+          { header: "Metric", width: 110 },
+          { header: "Avg / recorded day", width: 100, align: "right" },
+          { header: "Calorie share", width: 306 },
+        ],
+        rows.map(row => [metric(row), row.average, printed(row)]),
+      );
+    }
+    paragraph(
+      `Averages cover the ${nutrition.recordedDays} ${nutrition.recordedDays === 1 ? "day" : "days"} holding at least `
+      + "one food entry, not every calendar day in the range.",
+      8.5,
+    );
+    paragraph(CALORIE_SHARE_NOTE, 8.5);
+    if (withGoals) paragraph(CURRENT_GOALS_NOTE, 8.5);
+  }
+
   // ---- Cover block -------------------------------------------------------
   font(20, "bold");
   doc.text("Health export", MARGIN, y + 6);
@@ -217,17 +280,20 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
       case "goals": {
         const current = data.goals?.current;
         if (!current) paragraph("No goals have been saved for this profile.", 9, MUTED, "italic");
-        else table(
-          [{ header: "Goal", width: 258 }, { header: "Target", width: 258, align: "right" }],
-          [
-            ["Calories", `${whole(current.calories)} per day`],
-            ["Protein", `${amount(current.protein)} g`],
-            ["Fat", `${amount(current.fat)} g`],
-            ["Net carbs", `${amount(current.netCarbs)} g`],
-            ["Fiber", `${amount(current.fiber)} g`],
-            ["Water", `${amount(current.waterOunces)} oz`],
-          ],
-        );
+        else {
+          table(
+            [
+              { header: "Goal", width: 160 },
+              { header: "Target", width: 120, align: "right" },
+              { header: "Calorie context", width: 236 },
+            ],
+            goalRows(current).map(row => [row.label, row.target, row.context || "-"]),
+          );
+          paragraph(
+            "Fiber is a gram goal and has no calorie share. Net carbs are shown as a calorie-equivalent because they "
+            + "exclude fiber, and there is no total-carbohydrate goal. The saturated fat goal is optional.",
+          );
+        }
         const stamped = data.goals?.dailyCalorieGoals ?? [];
         if (stamped.length > 0) {
           ensure(40);
@@ -290,6 +356,7 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
           ]),
         );
         fatBreakdownTable(dailyNutrition(data));
+        if (summary.nutrition) averagesTable(summary.nutrition);
         break;
       }
       case "foodEntries": {
@@ -313,7 +380,10 @@ export async function buildExportPdf(data: ExportPayload): Promise<Blob> {
         );
         // The daily totals section already prints this when it travelled, so it
         // is only added here when the individual entries came on their own.
-        if (!chosen.has("dailySummaries")) fatBreakdownTable(dailyNutrition(data));
+        if (!chosen.has("dailySummaries")) {
+          fatBreakdownTable(dailyNutrition(data));
+          if (summary.nutrition) averagesTable(summary.nutrition);
+        }
         break;
       }
       case "waterEntries": {

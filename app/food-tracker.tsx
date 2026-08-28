@@ -5,14 +5,17 @@ import ExportPanel from "./export-panel";
 import { exportSections as allExportSections } from "./export-shared";
 import {
   type FatBreakdown, type FatTotals,
-  UNKNOWN_FAT_LABEL, aggregateFat, emptyFatTotals, fatCoverageNote, fatSubtypeKeys, fatSubtypeLabels,
-  fatSubtypeShortLabels, gramsOrUnknown, hasFatDetail, unclassifiedFat,
+  type NutritionAverages, type NutritionRow,
+  CALORIE_SHARE_NOTE, CURRENT_GOALS_NOTE, UNKNOWN_FAT_LABEL, aggregateFat, emptyFatTotals,
+  fatCoverageNote, fatSubtypeKeys, fatSubtypeLabels, fatSubtypeShortLabels, goalContext,
+  gramsOrUnknown, hasFatDetail, nutritionRows, unclassifiedFat,
 } from "./nutrition";
 import {
   type Profile, addDays, amount, lastCompleteDays, localDate, longDate, mediumDate,
   profileNames, round, shortDate, weekdayLabel, whole,
 } from "./shared";
 import WeightChart from "./weight-chart";
+import WorkoutsPage from "./workouts";
 
 type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
 /** A saved diary entry. The fat subtypes are null on anything logged before the breakdown existed. */
@@ -48,8 +51,9 @@ type ScannedProduct = {
   missingFatDetail: string[];
   missing: string[]; source: string; attribution: string;
 } & FatBreakdown;
-type Goals = { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number };
-type View = "diary" | "foods" | "reports" | "calendar" | "weight" | "journal";
+/** `saturatedFat` is the one optional goal: null means none has been set. */
+type Goals = { calories: number; protein: number; fat: number; netCarbs: number; saturatedFat: number | null; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number };
+type View = "diary" | "foods" | "reports" | "calendar" | "weight" | "journal" | "workouts";
 type CalendarDay = {
   date: string; calories: number; items: number; goalCalories: number; goalSource: "saved" | "current";
   remaining: number; status: "none" | "under" | "over" | "way-over";
@@ -58,10 +62,14 @@ type CalendarDay = {
 };
 type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string; movement?: ActivitySession[]; steps: number | null; fatDetail?: FatTotals };
 type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; steps: number; daysInRange: number; daysWithFood: number; daysWithExercise: number; daysWithSteps: number; fatDetail?: FatTotals };
+/** Averages over the days holding at least one food entry, from the reports feed. */
+type ReportNutrition = { recordedDays: number; averages: NutritionAverages; subtypeDays: Partial<Record<string, number>> };
+/** The goals in force now. `saturatedFat` is null when none has been set. */
+type ReportGoals = { calories: number; protein: number; fat: number; netCarbs: number; saturatedFat: number | null; fiber: number; waterOunces: number };
 type ReportAverages = { caloriesPerDay: number; caloriesPerLoggedDay: number; exerciseMinutesPerDay: number; stepsPerRecordedDay: number };
 
 const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
-const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, fiber: 25, waterOunces: 64, waterShortcutOne: 6, waterShortcutTwo: 8, waterShortcutThree: 12 };
+const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, saturatedFat: null, fiber: 25, waterOunces: 64, waterShortcutOne: 6, waterShortcutTwo: 8, waterShortcutThree: 12 };
 const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "diary", label: "Diary", title: "Nourish", eyebrow: "Daily Food Tracker" },
   { id: "foods", label: "My Foods", title: "My Foods", eyebrow: "Reusable entries" },
@@ -69,6 +77,7 @@ const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "reports", label: "Reports", title: "Reports", eyebrow: "Calories & movement" },
   { id: "weight", label: "Weight", title: "Weight", eyebrow: "Your weight log" },
   { id: "journal", label: "Journal", title: "Journal", eyebrow: "Daily recap" },
+  { id: "workouts", label: "Workouts", title: "Workouts", eyebrow: "Programs & training" },
 ];
 const weekdayInitials = ["S", "M", "T", "W", "T", "F", "S"];
 /** Sensible starting meal when the Add food button does not know which one. */
@@ -308,6 +317,9 @@ export default function FoodTracker() {
     {view === "reports" && <ReportsPage profile={profile} />}
     {view === "weight" && <WeightPage profile={profile} />}
     {view === "journal" && <JournalPage profile={profile} />}
+    {/* A finished workout writes one activity entry, so the day is reloaded to
+        pick it up rather than left showing the diary as it was. */}
+    {view === "workouts" && <WorkoutsPage profile={profile} onActivityChanged={() => void loadDay(date)} />}
 
     {view === "diary" && <>
       <section className="date-nav" aria-label="Choose tracking date">
@@ -641,7 +653,7 @@ function ReportsPage({ profile }: { profile: Profile }) {
   const initial = lastCompleteDays(7);
   const [start, setStart] = useState(initial.start);
   const [end, setEnd] = useState(initial.end);
-  const [report, setReport] = useState<{ key: string; days: ReportDay[]; totals: ReportTotals | null; averages: ReportAverages | null } | null>(null);
+  const [report, setReport] = useState<{ key: string; days: ReportDay[]; totals: ReportTotals | null; averages: ReportAverages | null; nutrition: ReportNutrition | null; goals: ReportGoals | null } | null>(null);
   const [error, setError] = useState("");
   const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
   const rangeInvalid = start > end;
@@ -652,8 +664,8 @@ function ReportsPage({ profile }: { profile: Profile }) {
     let active = true;
     fetch(`/api/reports?start=${start}&end=${end}`, { headers })
       .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? "Unable to build the report"); return data; })
-      .then(data => { if (!active) return; setError(""); setReport({ key: rangeKey, days: data.days ?? [], totals: data.totals ?? null, averages: data.averages ?? null }); })
-      .catch(reason => { if (!active) return; setError(reason instanceof Error ? reason.message : "Unable to build the report"); setReport({ key: rangeKey, days: [], totals: null, averages: null }); });
+      .then(data => { if (!active) return; setError(""); setReport({ key: rangeKey, days: data.days ?? [], totals: data.totals ?? null, averages: data.averages ?? null, nutrition: data.nutrition ?? null, goals: data.goals ?? null }); })
+      .catch(reason => { if (!active) return; setError(reason instanceof Error ? reason.message : "Unable to build the report"); setReport({ key: rangeKey, days: [], totals: null, averages: null, nutrition: null, goals: null }); });
     return () => { active = false; };
   }, [rangeKey, rangeInvalid, start, end, headers]);
 
@@ -662,6 +674,8 @@ function ReportsPage({ profile }: { profile: Profile }) {
   const days = ready ? report.days : [];
   const totals = ready ? report.totals : null;
   const averages = ready ? report.averages : null;
+  const nutrition = ready ? report.nutrition : null;
+  const reportGoals = ready ? report.goals : null;
   const loading = !rangeInvalid && !ready;
 
   // Read the clock again rather than reusing the render-time value, so a page
@@ -729,7 +743,7 @@ function ReportsPage({ profile }: { profile: Profile }) {
         </table>
       </div>
 
-      <FatReport totals={totals?.fatDetail ?? emptyFatTotals()} recordedDays={totals?.daysWithFood ?? 0} />
+      <NutritionAveragesTable nutrition={nutrition} fat={totals?.fatDetail ?? emptyFatTotals()} goals={reportGoals} />
 
       {days.some(day => (day.movement ?? []).length > 0) && <div className="report-movement">
         <h3>Movement log</h3>
@@ -748,46 +762,58 @@ function ReportsPage({ profile }: { profile: Profile }) {
 }
 
 /**
- * Fat across a report range: total fat first, then each subtype beneath it.
+ * Nutrition averages for a report range, with the fat breakdown beneath total
+ * fat and a percentage or a piece of context beside every metric.
  *
- * Averages follow the same recorded-day rule the rest of the report uses —
- * days holding at least one food entry, never every calendar day. A subtype
- * nothing recorded reads "Not available" rather than 0 g, and a subtype only
- * some entries carried is shown with the count it covers.
+ * Every number here comes from `nutritionRows`, the same builder both PDFs
+ * use, so the screen and the printed documents cannot disagree. Averages cover
+ * the days holding at least one food entry, which is the rule the rest of the
+ * report already follows.
+ *
+ * Two different percentages appear in the last column and are always labelled
+ * for which they are: a share of the average calories, or how much of a
+ * configured goal was reached. Fiber only ever shows the second kind.
  */
-function FatReport({ totals, recordedDays }: { totals: FatTotals; recordedDays: number }) {
-  const perDay = (value: number | null) => value === null || recordedDays === 0
-    ? "—"
-    : `${amount(Math.round(value / recordedDays * 100) / 100)} g`;
-  const note = fatCoverageNote(totals);
-  return <div className="report-fat">
-    <h3>Fat breakdown</h3>
+function NutritionAveragesTable({ nutrition, fat, goals }: {
+  nutrition: ReportNutrition | null; fat: FatTotals; goals: ReportGoals | null;
+}) {
+  const recordedDays = nutrition?.recordedDays ?? 0;
+  const rows: NutritionRow[] = nutrition
+    ? nutritionRows({
+        averages: nutrition.averages, fat, recordedDays, goals,
+        subtypeDays: nutrition.subtypeDays as Partial<Record<typeof fatSubtypeKeys[number], number>>,
+      })
+    : [];
+  const coverage = fatCoverageNote(fat);
+
+  return <div className="report-nutrition">
+    <h3>Nutrition averages</h3>
     <p className="page-help">
-      {totals.records === 0
-        ? "No food was recorded in this range."
-        : `Averages cover the ${recordedDays} ${recordedDays === 1 ? "day" : "days"} holding at least one food entry, not every day in the range. The subtypes are not expected to add up to total fat.`}
+      {recordedDays === 0
+        ? "No food was recorded in this range, so there is nothing to average."
+        : `Averages cover the ${recordedDays} ${recordedDays === 1 ? "day" : "days"} holding at least one food entry, not every day in the range. Total carbohydrates have no goal; net carbs are shown separately as a calorie-equivalent because they exclude fiber.`}
     </p>
-    {totals.records > 0 && <>
+    {recordedDays > 0 && <>
       <div className="report-table-wrap">
-        <table className="report-table">
-          <caption className="report-visually-hidden">Total fat and fat subtypes for this range</caption>
-          <thead><tr><th scope="col">Fat</th><th scope="col">Total</th><th scope="col">Per recorded day</th><th scope="col">Entries</th></tr></thead>
-          <tbody>
-            <tr>
-              <th scope="row"><strong>Total fat</strong></th>
-              <td>{amount(totals.total)} g</td><td>{perDay(totals.total)}</td>
-              <td>{totals.records} of {totals.records}</td>
-            </tr>
-            {fatSubtypeKeys.map(key => <tr key={key} className={totals.subtotals[key] === null ? "report-empty-day" : ""}>
-              <th scope="row"><strong>{fatSubtypeLabels[key]}</strong></th>
-              <td>{gramsOrUnknown(totals.subtotals[key])}</td>
-              <td>{perDay(totals.subtotals[key])}</td>
-              <td>{totals.known[key]} of {totals.records}</td>
-            </tr>)}
-          </tbody>
+        <table className="report-table nutrition-table">
+          <caption className="report-visually-hidden">Average nutrition per recorded day, with calorie shares and goal percentages</caption>
+          <thead><tr>
+            <th scope="col">Metric</th>
+            <th scope="col">Average per recorded day</th>
+            <th scope="col">Current daily goal</th>
+            <th scope="col">Percentage or context</th>
+          </tr></thead>
+          <tbody>{rows.map(row => <tr key={row.key} className={row.nested ? "nutrition-subrow" : ""}>
+            <th scope="row"><strong>{row.nested ? `— ${row.metric}` : row.metric}</strong></th>
+            <td>{row.average}</td>
+            <td>{row.goal}</td>
+            <td className="nutrition-context">{row.context || "—"}</td>
+          </tr>)}</tbody>
         </table>
       </div>
-      {note && <p className="page-help report-fat-note">{note}</p>}
+      <p className="page-help report-fat-note">{CURRENT_GOALS_NOTE}</p>
+      <p className="page-help">{CALORIE_SHARE_NOTE}</p>
+      {coverage && <p className="page-help">{coverage}</p>}
     </>}
   </div>;
 }
@@ -1600,17 +1626,66 @@ function validShortcut(value: number) {
   return Number.isFinite(value) && value > 0 && value <= MAX_WATER_OUNCES && Math.abs(value * 100 - Math.round(value * 100)) < 1e-9;
 }
 
+/**
+ * One goal input with its live percentage note.
+ *
+ * The note sits inside the label, so a screen reader announces "Protein (g),
+ * 28.6% of calories" as the field's name and the two never separate.
+ */
+function GoalField({ name, label, note, value, min = "1", step = "1", onChange }: {
+  name: string; label: string; note: string; value: string; min?: string; step?: string;
+  onChange: (value: string) => void;
+}) {
+  return <label>
+    <span className="goal-field-label">{label}{note && <small>{note}</small>}</span>
+    <input name={name} type="number" min={min} step={step} inputMode="decimal" value={value}
+      onChange={event => onChange(event.target.value)} />
+  </label>;
+}
+
 function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; profile: Profile; onClose: () => void; onSaved: (goals: Goals) => void }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  // The goal fields are controlled so their percentages recalculate as they
+  // are typed. Nothing stored is changed by this; it is display only until the
+  // form is saved.
+  const [draft, setDraft] = useState({
+    calories: String(goals.calories),
+    netCarbs: String(goals.netCarbs),
+    protein: String(goals.protein),
+    fat: String(goals.fat),
+    saturatedFat: goals.saturatedFat === null ? "" : String(goals.saturatedFat),
+    fiber: String(goals.fiber),
+    waterOunces: String(goals.waterOunces),
+  });
+  const field = (key: keyof typeof draft) => (value: string) => setDraft(current => ({ ...current, [key]: value }));
+  /** A half-typed, blank, zero, or negative box has no percentage to show. */
+  const entered = (value: string) => {
+    const text = value.trim();
+    if (!text) return null;
+    const parsed = Number(text);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  };
+  const context = goalContext({
+    calories: entered(draft.calories), netCarbs: entered(draft.netCarbs), protein: entered(draft.protein),
+    fat: entered(draft.fat), saturatedFat: entered(draft.saturatedFat), fiber: entered(draft.fiber),
+  });
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); const form = new FormData(event.currentTarget);
+    // Blank stays blank: an unset saturated-fat goal is null, never zero.
+    const saturatedRaw = String(form.get("saturatedFat") ?? "").trim();
     const next: Goals = {
       calories: Number(form.get("calories")), protein: Number(form.get("protein")), fat: Number(form.get("fat")),
-      netCarbs: Number(form.get("netCarbs")), fiber: Number(form.get("fiber")), waterOunces: Number(form.get("waterOunces")),
+      netCarbs: Number(form.get("netCarbs")), saturatedFat: saturatedRaw === "" ? null : Number(saturatedRaw),
+      fiber: Number(form.get("fiber")), waterOunces: Number(form.get("waterOunces")),
       waterShortcutOne: Number(form.get("waterShortcutOne")), waterShortcutTwo: Number(form.get("waterShortcutTwo")), waterShortcutThree: Number(form.get("waterShortcutThree")),
     };
     if ([next.waterShortcutOne, next.waterShortcutTwo, next.waterShortcutThree].some(value => !validShortcut(value))) {
       setError(`Water shortcuts must be positive numbers up to ${MAX_WATER_OUNCES} with no more than two decimal places.`);
+      return;
+    }
+    if (next.saturatedFat !== null && !(next.saturatedFat > 0)) {
+      setError("The saturated fat goal must be more than zero, or left blank for no goal.");
       return;
     }
     setBusy(true);
@@ -1624,7 +1699,21 @@ function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; pr
     <div className="coming-soon"><span>✓</span><div><strong>These settings belong to {profileNames[profile]}</strong><p>Goals and water shortcuts are stored per profile, so the other profile is never changed.</p></div></div>
     <form onSubmit={submit} className="food-form">
       <p className="field-heading">Daily goals</p>
-      <div className="form-grid"><label>Calories<input name="calories" type="number" min="1" defaultValue={goals.calories} /></label><label>Net carbs (g)<input name="netCarbs" type="number" min="1" defaultValue={goals.netCarbs} /></label><label>Protein (g)<input name="protein" type="number" min="1" defaultValue={goals.protein} /></label><label>Fat (g)<input name="fat" type="number" min="1" defaultValue={goals.fat} /></label><label>Fiber (g)<input name="fiber" type="number" min="1" defaultValue={goals.fiber} /></label><label>Water (oz)<input name="waterOunces" type="number" min="1" defaultValue={goals.waterOunces} /></label></div>
+      <div className="form-grid">
+        <GoalField name="calories" label="Calories" note={context.calories} value={draft.calories} onChange={field("calories")} />
+        <GoalField name="netCarbs" label="Net carbs (g)" note={context.netCarbs} value={draft.netCarbs} step="0.01" onChange={field("netCarbs")} />
+        <GoalField name="protein" label="Protein (g)" note={context.protein} value={draft.protein} step="0.01" onChange={field("protein")} />
+        <GoalField name="fat" label="Total fat (g)" note={context.fat} value={draft.fat} step="0.01" onChange={field("fat")} />
+        <GoalField name="saturatedFat" label="Saturated fat (g)" note={context.saturatedFat || "optional"} value={draft.saturatedFat} min="0.01" step="0.01" onChange={field("saturatedFat")} />
+        <GoalField name="fiber" label="Fiber (g)" note={context.fiber} value={draft.fiber} step="0.01" onChange={field("fiber")} />
+        <GoalField name="waterOunces" label="Water (oz)" note={context.waterOunces} value={draft.waterOunces} step="0.01" onChange={field("waterOunces")} />
+      </div>
+      <small className="field-help">
+        Percentages update as you type. Protein, total fat, and saturated fat show their share of the calorie goal;
+        net carbs show a calorie-equivalent, because net carbs exclude fiber and there is no total-carbohydrate goal.
+        They are not meant to add up to 100%. Fiber is a gram goal, not a calorie share, and the saturated fat goal
+        is optional — leave it blank for no goal.
+      </small>
       <p className="field-heading spaced">Water shortcut buttons</p>
       <div className="form-grid three"><label>Shortcut 1 (oz)<input name="waterShortcutOne" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutOne)} /></label><label>Shortcut 2 (oz)<input name="waterShortcutTwo" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutTwo)} /></label><label>Shortcut 3 (oz)<input name="waterShortcutThree" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutThree)} /></label></div>
       <small className="field-help">These replace the +6, +8, and +12 buttons on the hydration card. The +Other button always stays available.</small>

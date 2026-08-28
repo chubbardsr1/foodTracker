@@ -96,9 +96,9 @@ Run a new migration locally with:
 npx wrangler d1 execute DB --local --config=.\wrangler.local.jsonc --persist-to=.\.local-data --file=.\drizzle\<migration-file>.sql
 ```
 
-Migrations `0000` through `0009` are already established. Do not normally
+Migrations `0000` through `0011` are already established. Do not normally
 rerun them. New schema changes must use the next numbered SQL file in
-`drizzle`, starting with `0010_...`.
+`drizzle`, starting with `0012_...`.
 
 ## Production
 
@@ -149,6 +149,20 @@ must be applied remotely before deploying code that requires its new schema.
 - Nutrition values support two decimal places.
 - Net carbohydrates are calculated as total carbohydrates minus fiber.
 - Total fat is the primary fat value and is never derived from its subtypes.
+- A workout session snapshots what the program prescribed when it started.
+  Editing a program, template, exercise description, or video must never change
+  a workout already recorded.
+- A program cycle only ever exists because a user started it with a start date
+  they chose. Never create one from a migration, a seed, or the current date,
+  and never mark a cycle or a week completed merely because a date has passed.
+- Finishing a workout writes exactly one `exercise_entries` row and stores its
+  id on the session, so re-finishing updates that row. Never let a workout add
+  a second activity entry or otherwise double-count a day.
+- Percentage of calories and percentage of a configured goal are different
+  things and are always labelled as such. Calorie shares use 4/4/9 and are
+  never adjusted to total 100%. Total carbohydrates, not net carbs, are the
+  carbohydrate share of calories; net carbs are a "calorie-equivalent". Fiber
+  is reported against its gram goal, never as a share of calories.
 - Saturated, trans, monounsaturated, and polyunsaturated fat are nullable.
   Null means the value was never recorded; 0 means a source reported none.
   Never turn a missing subtype into a zero, never force the four to add up to
@@ -166,9 +180,13 @@ must be applied remotely before deploying code that requires its new schema.
 - Ounce servings and fractional serving scaling
 - Calories, protein, total fat, saturated/trans/monounsaturated/polyunsaturated
   fat, total carbs, fiber, and net carbs
-- Per-profile daily goals
+- Per-profile daily goals, including an optional saturated-fat goal
 - Water tracking
 - Exercise tracking
+- Workout programs: a reusable exercise and program library seeded with VASA's
+  four-week plan, per-profile four-week cycles with explicit start dates,
+  set-by-set workout tracking, workout history, and one linked activity-diary
+  entry per finished workout
 - Cloudflare Access protection
 
 Always inspect the actual local code before assuming a recently added feature is

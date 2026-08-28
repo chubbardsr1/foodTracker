@@ -58,7 +58,30 @@ function assertLayout(drawn, label) {
   }
 }
 
+/**
+ * Nothing was shortened to fit its column.
+ *
+ * The PDF helpers trim an oversized cell and append an ellipsis, so a drawn
+ * string ending in "..." is a clipped label. Only used where every cell is a
+ * number or a fixed phrase; the detailed export legitimately trims long food
+ * names.
+ */
+function assertNotClipped(drawn, label) {
+  const clipped = drawn.filter(item => item.text.endsWith("...")).map(item => item.text);
+  assert.deepEqual(clipped, [], `${label}: clipped cells`);
+}
+
 const said = (drawn, needle) => drawn.some(item => item.text.includes(needle));
+/** Everything drawn on the same baseline as `label`, left to right. */
+function row(drawn, label) {
+  const anchor = drawn.find(item => item.text === label);
+  if (!anchor) return "";
+  return drawn
+    .filter(item => item.page === anchor.page && Math.abs(item.y - anchor.y) < 0.6)
+    .sort((a, b) => a.x - b.x)
+    .map(item => item.text)
+    .join(" | ");
+}
 /**
  * Every drawn string as one line of prose. A paragraph is wrapped and drawn a
  * line at a time, so a sentence has to be matched against the whole page.
@@ -105,34 +128,37 @@ test("the doctor summary keeps total carbs, net carbs, and no total-carb goal", 
   const { blob, drawn } = await render(buildSummaryPdf, data);
   assert.ok(blob.size > 1000);
   assertLayout(drawn, "summary PDF");
+  assertNotClipped(drawn, "summary PDF");
 
-  assert.ok(said(drawn, "Total carbs"), "total carbohydrates must still be reported");
-  assert.ok(said(drawn, "Net carbs"), "net carbohydrates must still be reported");
-  // Total carbs has no goal and must not gain one; the cell says so outright.
-  assert.ok(said(drawn, "no goal set"));
-  const goalColumn = drawn.filter(item => item.align === "right" && /^\d+(\.\d+)? g$/.test(item.text));
-  assert.ok(goalColumn.some(item => item.text === "125 g"), "the net-carb goal is still shown");
+  assert.ok(said(drawn, "Total carbohydrates"), "total carbohydrates must still be reported");
+  assert.ok(said(drawn, "Net carbohydrates"), "net carbohydrates must still be reported");
+  // Total carbohydrates have no goal and must not gain one; the cell says so.
+  const carbRow = row(drawn, "Total carbohydrates");
+  assert.ok(carbRow.includes("no goal"), `total carbs must show no goal: ${carbRow}`);
+  assert.equal(/\d+(\.\d+)? g *\|? *$/.test(carbRow.replace(/.*no goal/, "")), false);
+  assert.ok(said(drawn, "125 g"), "the net-carb goal is still shown");
   // 160 + 155 + 168 over three days averages 161, which must appear as a
   // number and never as a goal.
   assert.ok(said(drawn, "161.0 g"), "total carbs still average correctly");
-  assert.equal(drawn.filter(item => item.text === "168 g").length, 0);
 });
 
 test("the doctor summary prints the fat breakdown under total fat", async () => {
   const data = payload({ sections: ["dailySummaries", "goals"], days: { dailySummaries } });
   const { drawn } = await render(buildSummaryPdf, data);
+  assertNotClipped(drawn, "summary PDF fat rows");
 
-  const order = drawn.filter(item => /^(Fat|- )/.test(item.text)).map(item => item.text);
+  const order = drawn.filter(item => /^(Total fat|- )/.test(item.text)).map(item => item.text);
   assert.deepEqual(order.slice(0, 5), [
-    "Fat", "- Saturated fat", "- Trans fat", "- Monounsaturated fat", "- Polyunsaturated fat",
+    "Total fat", "- Saturated fat", "- Trans fat", "- Monounsaturated fat", "- Polyunsaturated fat",
   ]);
 
   // 28 + 19.5 = 47.5 g of saturated fat across three recorded days is 15.8 g.
   assert.ok(said(drawn, "15.8 g"), "saturated fat averages over the recorded days");
   // Monounsaturated fat came from one day only, so the count says so.
   assert.ok(said(drawn, "11.0 g"));
-  assert.ok(said(drawn, "1 of 3"));
-  assert.ok(said(drawn, "2 of 3"), "the days each subtype covers are stated");
+  // The printed rows stay one line each; which subtypes are partial is spelled
+  // out in the paragraph beneath, so no cell has to be shortened.
+  assert.match(prose(drawn), /recorded saturated fat on 7 of 15/i);
   // Nothing anywhere recorded polyunsaturated fat, which must not read 0.0 g.
   assert.ok(said(drawn, "Not available"));
   assert.match(prose(drawn), /Fat breakdown: Subtype sums cover only the food entries that recorded each value/i);
@@ -147,6 +173,7 @@ test("the doctor summary never shows an unrecorded subtype as zero", async () =>
   }));
   const { drawn } = await render(buildSummaryPdf, payload({ sections: ["dailySummaries", "goals"], days: { dailySummaries: none } }));
   assertLayout(drawn, "summary PDF without any breakdown");
+  assertNotClipped(drawn, "summary PDF without any breakdown");
   assert.equal(drawn.filter(item => item.text === "0.0 g").length, 0);
   assert.equal(drawn.filter(item => item.text === "Not available").length, 4);
   assert.match(prose(drawn), /only total fat is available/i);
@@ -156,8 +183,11 @@ test("the doctor summary is unchanged when nothing new applies", async () => {
   // No fat breakdown at all and no goals section: the layout must still hold.
   const { drawn } = await render(buildSummaryPdf, payload({ sections: ["dailySummaries"], days: { dailySummaries } }));
   assertLayout(drawn, "summary PDF without goals");
-  assert.ok(said(drawn, "Total carbs"));
-  assert.ok(said(drawn, "Net carbs"));
+  assertNotClipped(drawn, "summary PDF without goals");
+  assert.ok(said(drawn, "Total carbohydrates"));
+  assert.ok(said(drawn, "Net carbohydrates"));
+  // With no goals section there is no goal column and no goal percentage.
+  assert.equal(said(drawn, "of goal"), false);
 });
 
 test("the detailed export prints a fat breakdown table per day", async () => {
@@ -202,7 +232,8 @@ test("a legacy export with no fat fields renders both PDFs unchanged", async () 
 
   const doctor = await render(buildSummaryPdf, data);
   assertLayout(doctor.drawn, "legacy summary PDF");
-  assert.ok(said(doctor.drawn, "Total carbs"));
+  assertNotClipped(doctor.drawn, "legacy summary PDF");
+  assert.ok(said(doctor.drawn, "Total carbohydrates"));
   assert.ok(said(doctor.drawn, "Not available"));
 
   const detailed = await render(buildExportPdf, data);
@@ -222,4 +253,5 @@ test("a long range still breaks cleanly across pages", async () => {
   assert.ok(Math.max(...detailed.drawn.map(item => item.page)) > 1, "a long range runs to more than one page");
   const doctor = await render(buildSummaryPdf, data);
   assertLayout(doctor.drawn, "long summary PDF");
+  assertNotClipped(doctor.drawn, "long summary PDF");
 });

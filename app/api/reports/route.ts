@@ -1,7 +1,7 @@
 import { and, asc, eq, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { exerciseEntries, foodEntries, stepEntries } from "../../../db/schema";
-import { type FatTotals, emptyFatTotals, fatTotalsFrom, mergeFatTotals } from "../../nutrition";
+import { exerciseEntries, foodEntries, nutritionGoals, stepEntries } from "../../../db/schema";
+import { type FatSubtype, type FatTotals, emptyFatTotals, fatSubtypeKeys, fatTotalsFrom, mergeFatTotals } from "../../nutrition";
 import { profileFrom } from "../profile";
 
 const MAX_DAYS = 366;
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
     if (dates.length > MAX_DAYS) return Response.json({ error: `Choose a range of ${MAX_DAYS} days or fewer` }, { status: 400 });
 
     const db = getDb(); const owner = profileFrom(request);
-    const [foodRows, exerciseRows, sessionRows, stepRows] = await Promise.all([
+    const [foodRows, exerciseRows, sessionRows, stepRows, goalRows] = await Promise.all([
       db.select({
         date: foodEntries.eatenOn,
         calories: sql<number>`sum(${foodEntries.calories})`,
@@ -72,6 +72,10 @@ export async function GET(request: Request) {
         .orderBy(asc(exerciseEntries.exercisedOn), asc(exerciseEntries.id)),
       db.select({ date: stepEntries.steppedOn, steps: stepEntries.steps }).from(stepEntries)
         .where(and(eq(stepEntries.owner, owner), gte(stepEntries.steppedOn, start), lte(stepEntries.steppedOn, end))),
+      // The goals in force right now. The tracker keeps dated history for the
+      // calorie goal only, so the report says these are the current settings
+      // rather than implying they applied on every date in the range.
+      db.select().from(nutritionGoals).where(eq(nutritionGoals.owner, owner)).limit(1),
     ]);
 
     const foodByDate = new Map(foodRows.map(row => [row.date, row]));
@@ -128,6 +132,32 @@ export async function GET(request: Request) {
       // Averaged over the days that were actually recorded, so blank days do not drag it down.
       stepsPerRecordedDay: totals.daysWithSteps > 0 ? Math.round(totals.steps / totals.daysWithSteps) : 0,
     };
-    return Response.json({ start, end, days, totals, averages });
+    // Nutrition averages follow the same recorded-day rule the rest of the
+    // report and the summary PDF use: days holding at least one food entry,
+    // never every calendar day in the range.
+    const recorded = days.filter(day => day.items > 0);
+    const recordedDays = recorded.length;
+    const per = (pick: (day: typeof days[number]) => number) =>
+      recordedDays === 0 ? 0 : roundTwo(recorded.reduce((sum, day) => sum + pick(day), 0) / recordedDays);
+    const nutrition = {
+      recordedDays,
+      averages: {
+        calories: per(day => day.calories), protein: per(day => day.protein), carbs: per(day => day.carbs),
+        fat: per(day => day.fat), fiber: per(day => day.fiber), netCarbs: per(day => day.netCarbs),
+      },
+      // Days that recorded each subtype at least once, so a partial average is
+      // shown as partial rather than as the whole range.
+      subtypeDays: Object.fromEntries(fatSubtypeKeys.map(key =>
+        [key, recorded.filter(day => day.fatDetail.known[key] > 0).length])) as Record<FatSubtype, number>,
+    };
+    const goal = goalRows[0];
+    const goals = goal
+      ? {
+          calories: goal.calories, protein: goal.protein, fat: goal.fat, netCarbs: goal.netCarbs,
+          // Null when no saturated-fat goal has been set. Never a zero.
+          saturatedFat: goal.saturatedFat ?? null, fiber: goal.fiber, waterOunces: goal.waterOunces,
+        }
+      : null;
+    return Response.json({ start, end, days, totals, averages, nutrition, goals });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to build the report" }, { status: 500 }); }
 }

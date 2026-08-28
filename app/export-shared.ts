@@ -31,7 +31,8 @@ export type ExportPayload = {
   user: { profile: string; name: string };
   dateRange: { start: string; end: string; days: number };
   goals?: {
-    current: { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number } | null;
+    /** `saturatedFat` is null when no saturated-fat goal is set; there is no total-carb goal. */
+    current: { calories: number; protein: number; fat: number; netCarbs: number; fiber: number; waterOunces: number; saturatedFat?: number | null } | null;
     dailyCalorieGoals: { date: string; calories: number }[];
     defaultCalorieGoal: number;
   };

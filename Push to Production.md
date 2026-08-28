@@ -34,10 +34,43 @@ Migrations already applied to production - never rerun these:
   nullable with no default, so every existing diary entry and saved food keeps
   all of its values and carries an unknown breakdown until it is edited)
 
-Not yet applied to production:
+Not yet applied to production - run these in order, oldest first:
 
-- None. The next new migration starts at 0010_ and goes in the list above once
-  it has been run against the remote database.
+- 0010_saturated_fat_goal.sql (optional saturated_fat column on
+  nutrition_goals; additive and nullable with no default, so neither profile's
+  existing goals change and "no saturated-fat goal" stays distinct from a goal
+  of zero. There is still no total-carbohydrate goal.)
+
+- 0011_workout_programs.sql (nine new tables for workout programs and strength
+  training: exercise_library, workout_programs, workout_program_weeks,
+  workout_templates, workout_template_exercises, workout_program_cycles,
+  workout_sessions, workout_session_exercises, and workout_sets. Purely
+  additive - no existing table is altered, and the food diary, activity diary,
+  water, steps, weight, and journal tables are untouched. The VASA program
+  itself is not in this migration: it is imported by the application the first
+  time the Workouts page is opened, and that import is idempotent, so nothing
+  extra needs running for it. No cycle is created by the migration or the
+  import.)
+
+Verify a migration landed before deploying the code that needs it. These are
+read-only:
+
+npx wrangler d1 execute food-tracker-db --remote --command "PRAGMA table_info(nutrition_goals);"
+
+npx wrangler d1 execute food-tracker-db --remote --command "PRAGMA table_info(food_entries);"
+
+npx wrangler d1 execute food-tracker-db --remote --command "select name from sqlite_master where type='table' and (name like 'workout%' or name='exercise_library') order by name;"
+
+# Starting the first VASA cycle in production - one time, from the app
+
+The migration and the deploy leave the VASA program present but with no cycle,
+which is deliberate: a cycle belongs to one profile and needs a start date that
+was chosen rather than assumed. To start Chris's first cycle after deploying,
+open the site as Chris, go to Workouts, press "Start Cycle 1", and confirm the
+proposed start date of Monday, 31 August 2026. That gives Cycle 1 running
+through Sunday, 27 September 2026. Sarah's profile stays without a cycle until
+she starts her own. Nothing recorded before a cycle's start date counts toward
+it.
 
 # One-time secret setup - NOT part of a routine code push
 

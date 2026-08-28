@@ -19,13 +19,23 @@ total carbohydrates, fiber, and net carbohydrates.
   never recorded stays unknown and is shown as "Not available", never as 0 g.
   Tapping the Fat card on the diary opens the day's breakdown.
 - Fractional servings that scale the recorded nutrition
-- Editable calorie and macro goals
+- Editable calorie and macro goals, with an optional saturated-fat goal and a
+  live percentage beside each one as it is typed
+- Calorie shares and goal percentages in Settings, Reports, and both PDF
+  exports, kept strictly apart: a share of calories is never presented as a
+  goal percentage, fiber is reported against its gram goal rather than as a
+  share of calories, and net carbs are shown as a calorie-equivalent
 - Per-profile water shortcut buttons plus a custom-ounce option
 - Water and exercise tracking, with optional detailed comments on any
   activity
 - Gemini activity assistant that turns a typed or dictated workout into
   activity segments and a calorie estimate calculated from body weight
 - Manually entered daily step count, one total per person per day
+- Workout programs with set-by-set strength tracking: a reusable program
+  library seeded with VASA's published four-week plan, user-specific four-week
+  cycles with explicit start dates, Start and Resume Workout, per-set reps,
+  weight, and cardio recording, and one linked entry in the activity diary for
+  each finished workout
 - Weekly Reports page for calories consumed and recorded movement
 - Calendar page colouring each day against the calorie goal that applied on
   that day
@@ -48,7 +58,7 @@ Tapping the Nourish logo and title in the header reloads the page, for when
 Safari keeps showing a stale view of something just saved. It stays on the
 same address and works from the keyboard.
 
-The application has six sections, selected from the navigation under the
+The application has seven sections, selected from the navigation under the
 header:
 
 - **Diary** - the day's meals, macros, water, exercise, and steps. Steps are
@@ -85,6 +95,8 @@ header:
   chosen with the same date strip as the Diary, and earlier entries are
   listed below for jumping back. Entries are written by hand today; the
   planned chat recap will write them later.
+- **Workouts** - the workout program dashboard, the gym screen, and workout
+  history. See [Workout programs](#workout-programs) below.
 
 ### Exporting
 
@@ -331,6 +343,95 @@ and is made available under the
 The lookup sends an identifying User-Agent as Open Food Facts asks. It is a
 free, open service: no key, account, or payment is involved.
 
+## Workout programs
+
+The Workouts section holds a reusable program library and the workouts
+actually performed against it. It ships with VASA's published four-week
+program: three workouts a week - functional/free weight, machines, and a
+Studio Red class - across Weeks 1 to 4.
+
+### The program, cycles, and weeks
+
+A program is a reusable definition, shared by both profiles. A **cycle** is
+one profile's scheduled run of that program, and it is the only thing that
+gives the program dates. Importing or opening the program never starts a
+cycle: a cycle exists only once Start Cycle is pressed and a start date is
+confirmed. Weeks run Monday to Sunday from that date.
+
+There is no Week 5. After Week 4 the dashboard offers **Start new cycle**,
+which proposes the next cycle number and the Monday after the previous cycle
+ends, shows the four new week ranges, and lists every workout still unfinished
+in the previous cycle before anything is created. Cycle 2 begins with fresh
+statuses for Weeks 1 to 4; Cycle 1 keeps every session, status, weight, and
+note it already held. Two cycles of one program are not allowed to overlap
+unless the overlap is explicitly confirmed.
+
+Dates only ever *recommend* a week. Any workout in any week can be started
+early, finished late, or done out of order, and an unfinished workout stays
+available indefinitely. A Week 1 workout finished during Week 2 is still
+recorded as that cycle's Week 1, Workout n, with the date it was actually
+performed; it never counts toward another week or another cycle. Nothing is
+marked completed, or reopened, because a date passed: a week's status is
+worked out from its own workouts, and a cycle is only completed when it is
+marked so by hand.
+
+### Running a workout
+
+Start Workout creates a session and freezes what the program prescribed at
+that moment - names, descriptions, videos, sets, reps, and cardio targets -
+onto the session itself. Editing the program, an exercise description, or a
+video later therefore never rewrites history, and a past workout still reads
+correctly if the template or exercise is deleted outright.
+
+Only one session per workout can be in progress at a time; pressing Start
+again offers Resume rather than creating a second. Prescribed working sets are
+created up front, preloaded with the target reps and the weight used last
+time, and nothing counts as done until its tick is pressed. The gym screen
+shows only the fields that apply: no reps on a stair climber, no distance on a
+squat, and no weight on a body-weight exercise. Every change is saved as it is
+made.
+
+Finishing is always a separate step, offering **Completed** or **Partial**,
+with the duration, optional calories burned, optional difficulty, and notes.
+
+### The activity diary
+
+Finishing a workout writes exactly one ordinary entry in the daily activity
+diary, named for example `Strength Training - VASA, Cycle 1, Week 1,
+Workout 1`, carrying the duration, the calories entered, and a concise summary
+of the exercises and sets. The session remembers that entry, so finishing
+again, correcting the duration, or switching between Completed and Partial
+updates the same row rather than adding a second. Reports, the Calendar, and
+the exports read the diary as they always have, so a workout is counted once.
+Abandoning a workout removes its diary entry. Exercise calories stay
+informational and never change the food-calorie allowance.
+
+### Previous performance
+
+Each exercise shows the most recent completed performance, the machine or
+equipment settings recorded with it, and the heaviest completed working set
+ever recorded. That history is never limited to the current cycle, so Cycle 2
+still shows what was lifted in Cycle 1. Workout volume is the sum of
+`reps x weight` over completed working sets only.
+
+### The VASA source data
+
+`db/seed/vasa-4-week-fitness-program.md` holds the extracted source table, and
+`app/api/workouts/vasa-program.ts` holds it normalized into the shape the
+database stores, together with the list of corrections that were made. The
+import is idempotent: running it again updates in place and never duplicates
+the program, its weeks, its workouts, the exercise library, or a cycle.
+
+Corrections were limited to clear copy-and-paste mistakes in VASA's published
+table. The Week 1 incline-treadmill row repeats the lat-pulldown description
+and is seeded with no description rather than a wrong one; the Week 2 and
+Week 4 Box-Elevated Push-Up rows repeat a dumbbell-row description and use the
+published push-up text instead. Genuinely blank cells - the Week 3
+incline-treadmill targets and the Week 4 lat-pulldown sets and reps - stay
+empty rather than being invented. `KB` and `DB` are expanded to Kettlebell and
+Dumbbell so one movement is one exercise, while each workout keeps its own
+prescribed sets and reps.
+
 ## Technology
 
 - TypeScript
@@ -370,6 +471,16 @@ on the owner and the date.
 Food entries are assigned to the authenticated user's email, so two authenticated
 people receive separate diaries.
 
+The workout tables added in `0011_workout_programs.sql` keep the reusable
+program (`exercise_library`, `workout_programs`, `workout_program_weeks`,
+`workout_templates`, `workout_template_exercises`) apart from one profile's own
+records (`workout_program_cycles`, `workout_sessions`,
+`workout_session_exercises`, `workout_sets`). The reusable rows carry a null
+owner and are shared; everything personal carries the profile and is scoped by
+it on every read and write. The `_snapshot` columns on a session are what its
+history displays, which is why a past workout survives the program being edited
+or deleted.
+
 ## Planned next phase
 
 - Dedicated drinks/beverages category
@@ -378,6 +489,8 @@ people receive separate diaries.
   records how an entry was written so assisted entries can be told apart.
 - Weight trend chart and goal weight
 - Nutrition-label photo scanning
+- Workout programs beyond VASA, editable from the app rather than from a seed
+  file, and a progression engine that suggests the next weight
 
 Do not place private AI or other API keys directly in source files. Keys belong
 in `.dev.vars` locally and in Cloudflare secrets in production.

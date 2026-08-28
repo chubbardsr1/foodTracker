@@ -17,6 +17,7 @@
 | Lightweight security                        | Complete | Cloudflare Access permits only Chris’s and Sarah’s authorized email addresses.                                                                                 |
 | Water tracking                              | Complete | Separate water section with three shortcut buttons plus `+Other`. Each profile sets its own shortcut amounts in Settings, defaulting to 6, 8, and 12 ounces.   |
 | Drinks other than water                     | Partial  | Drinks containing calories can be entered as food, but there is no dedicated “Drinks” meal/category.                                                           |
+| Structured workout program tracking         | Complete | The Workouts section holds VASA's four-week program, user-specific four-week cycles with explicit start dates, Start/Resume Workout, set-by-set tracking, workout history, and one linked entry per finished workout in the activity diary. |
 | Exercise tracking on the main screen        | Complete | Tracks activity, minutes, optional calories burned, optional detailed comments, daily history, and separate Chris/Sarah records. A described workout can be estimated by Gemini and reviewed before saving.                                                           |
 | Put the site online                         | Complete | The application and D1 database are live on Cloudflare Workers.                                                                                                |
 | Restrict the live site to Chris and Sarah   | Complete | Cloudflare Access requires an email login code and allows only the two authorized email addresses.                                                             |
@@ -120,6 +121,17 @@ hand, from a saved food, from a scanned barcode, or from an AI estimate of a
 described meal. USDA food search was removed at Chris's request; it was not
 being used.
 
+- Nutrition percentages: Settings shows a live calorie share beside the net
+  carb, protein, total fat, and saturated fat goals, recalculating as they are
+  typed, and fiber stays a gram goal rather than a calorie share. The Reports
+  screen, the detailed export PDF, and the doctor summary PDF all carry a
+  Nutrition averages table built from one shared calculation, showing each
+  metric's average per recorded day, its current goal, and either its share of
+  average calories or how much of its goal was reached. The two kinds of
+  percentage are always labelled apart. A saturated-fat goal is now an
+  optional setting; there is still no total-carbohydrate goal, and total
+  carbohydrates remain reported alongside net carbohydrates.
+
 - Fat breakdown: saturated, trans, monounsaturated, and polyunsaturated fat
   are stored in grams beside total fat on every diary entry and saved food.
   All four are optional and nullable: a value a label, product record, or
@@ -127,3 +139,19 @@ being used.
   are never forced to add up to total fat. They scale with servings, appear
   on the diary Fat card's popup, in Reports, in both PDFs, and in the copied
   daily summary. There is no goal for any subtype, by design.
+
+- Workout programs: a Workouts section holds a reusable program library,
+  seeded from VASA's published four-week plan, and the workouts actually
+  performed against it. A program is reusable and shared; a cycle is one
+  profile's scheduled run of it and exists only once it is started with a
+  chosen start date. Chris's Cycle 1 runs Monday 31 August to Sunday 27
+  September 2026. There is no Week 5: after Week 4 a new cycle is started
+  deliberately, beginning again at Week 1, and previous cycles keep every
+  session, weight, and note. Dates only recommend a week, so a workout can be
+  started early, finished late, or done out of order and still belongs to its
+  own cycle and week. Starting a workout snapshots what it prescribed, so
+  editing the program later never rewrites history. Finishing a workout writes
+  exactly one activity-diary entry and keeps it in step afterwards, so Reports,
+  the Calendar, and the exports count it once. Deferred for now: editing
+  programs inside the app, importing other programs, a progression engine, and
+  charts beyond the basic volume figure.
