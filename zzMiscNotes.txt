@@ -10,6 +10,9 @@ npm run deploy
 npx wrangler d1 execute food-tracker-db --remote --command "PRAGMA table_info(food_entries);"
 
 
+-- run this before running SQL: Will enforce a connection
+npx --no-install wrangler whoami
+
 
 npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0006_weight_journal.sql
 npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0007_steps.sql
@@ -17,3 +20,6 @@ npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0008_exercise_
 npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0009_fat_breakdown.sql
 npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0010_saturated_fat_goal.sql
 npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0011_workout_programs.sql
+
+
+npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\0012_net_carb_goal_range.sql

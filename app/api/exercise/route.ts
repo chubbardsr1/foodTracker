@@ -57,8 +57,12 @@ export async function POST(request: Request) {
  * Corrects one activity entry.
  *
  * `comments` is only touched when the field is actually sent, so an edit that
- * changes the minutes can never blank out notes it never carried. The date and
- * the owner are never changed here.
+ * changes the minutes can never blank out notes it never carried. The owner is
+ * never changed here.
+ *
+ * `exercisedOn` moves the activity to another day, and is likewise only
+ * touched when the field is actually sent. It is a move: the one existing row
+ * is updated, so the activity keeps its id and no copy is left on the old day.
  */
 export async function PUT(request: Request) {
   try {
@@ -71,7 +75,15 @@ export async function PUT(request: Request) {
     if (invalidFields(activity, minutes, calories)) {
       return Response.json({ error: "Enter an activity, valid minutes, and optional calories burned" }, { status: 400 });
     }
-    const changes: { activity: string; minutes: number; calories: number; comments?: string } = { activity, minutes, calories };
+    // A plain local calendar date, stored exactly as it is written. No Date is
+    // built from it, so no timezone can move the activity a day either way.
+    const exercisedOn = payload.exercisedOn === undefined || payload.exercisedOn === null
+      ? null : String(payload.exercisedOn).trim();
+    if (exercisedOn !== null && !/^\d{4}-\d{2}-\d{2}$/.test(exercisedOn)) {
+      return Response.json({ error: "Choose a valid date for this activity" }, { status: 400 });
+    }
+    const changes: { activity: string; minutes: number; calories: number; comments?: string; exercisedOn?: string } = { activity, minutes, calories };
+    if (exercisedOn) changes.exercisedOn = exercisedOn;
     if (payload.comments !== undefined) {
       const rawComments = String(payload.comments ?? "");
       if (rawComments.trim().length > MAX_ACTIVITY_COMMENTS) {
@@ -80,11 +92,18 @@ export async function PUT(request: Request) {
       changes.comments = cleanComments(rawComments);
     }
 
-    const [entry] = await getDb().update(exerciseEntries).set(changes)
-      .where(and(eq(exerciseEntries.id, id), eq(exerciseEntries.owner, profileFrom(request))))
+    const db = getDb(); const owner = profileFrom(request);
+    const [before] = await db.select({ exercisedOn: exerciseEntries.exercisedOn }).from(exerciseEntries)
+      .where(and(eq(exerciseEntries.id, id), eq(exerciseEntries.owner, owner))).limit(1);
+    if (!before) return Response.json({ error: "That exercise entry was not found" }, { status: 404 });
+    const [entry] = await db.update(exerciseEntries).set(changes)
+      .where(and(eq(exerciseEntries.id, id), eq(exerciseEntries.owner, owner)))
       .returning();
     if (!entry) return Response.json({ error: "That exercise entry was not found" }, { status: 404 });
-    return Response.json({ entry });
+    // The day it moved to gets a calorie goal stamped on it, exactly as a day
+    // an activity was added to does. The day it left keeps the stamp it had.
+    if (exercisedOn && exercisedOn !== before.exercisedOn) await stampDailyGoal(db, owner, exercisedOn);
+    return Response.json({ entry, movedFrom: before.exercisedOn, moved: Boolean(exercisedOn) && exercisedOn !== before.exercisedOn });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Unable to update exercise" }, { status: 500 });
   }

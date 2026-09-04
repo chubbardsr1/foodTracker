@@ -23,6 +23,59 @@ export async function GET(request: Request) {
   }
 }
 
+/**
+ * Saves a food to My Foods.
+ *
+ * This is the same reusable-food record the Add Food form writes through its
+ * "Save this to My Foods" tick, with the same duplicate rule: a food already
+ * saved under the same name and serving is updated rather than joined by a
+ * second copy. Nothing about a diary entry is read, written, or moved here —
+ * a saved food and the diary are separate records, and history keeps its own
+ * nutrition snapshot whatever happens to the saved food afterwards.
+ *
+ * Values are stored exactly as sent, for one full serving.
+ */
+export async function POST(request: Request) {
+  try {
+    const payload = await request.json() as Record<string, unknown>;
+    const name = String(payload.name ?? "").trim();
+    const serving = String(payload.serving ?? "").trim();
+    const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
+    if (!name || !serving || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) {
+      return Response.json({ error: "Please complete every field with a valid value" }, { status: 400 });
+    }
+    const fatDetail = readFatBreakdown(payload);
+    if (!fatDetail.ok) return Response.json({ error: fatFieldError(fatDetail.field) }, { status: 400 });
+    const fatProblem = fatBreakdownProblem(nutrition.fat, fatDetail.value);
+    if (fatProblem) return Response.json({ error: fatProblem }, { status: 400 });
+    const rawBarcode = payload.barcode === undefined || payload.barcode === null ? "" : String(payload.barcode).trim();
+    const barcode = rawBarcode ? normalizeBarcode(rawBarcode) : null;
+    if (rawBarcode && !barcode) return Response.json({ error: "That barcode does not look right. Enter 8, 12, 13, or 14 digits." }, { status: 400 });
+
+    const db = getDb();
+    const owner = profileFrom(request);
+    if (barcode) {
+      const clash = await db.select({ id: customFoods.id }).from(customFoods)
+        .where(and(eq(customFoods.owner, owner), eq(customFoods.barcode, barcode))).limit(1);
+      if (clash[0]) return Response.json({ error: "Another saved food already uses that barcode." }, { status: 409 });
+    }
+    // Looked up first only so the answer can say whether a food was created or
+    // an existing one refreshed. The upsert below is what actually decides it.
+    const [existing] = await db.select({ id: customFoods.id }).from(customFoods)
+      .where(and(eq(customFoods.owner, owner), eq(customFoods.name, name), eq(customFoods.serving, serving))).limit(1);
+    const [food] = await db.insert(customFoods)
+      .values({ owner, name, serving, ...nutrition, ...fatDetail.value, barcode })
+      .onConflictDoUpdate({
+        target: [customFoods.owner, customFoods.name, customFoods.serving],
+        set: { ...nutrition, ...fatDetail.value, ...(barcode ? { barcode } : {}) },
+      })
+      .returning();
+    return Response.json({ food, created: !existing }, { status: existing ? 200 : 201 });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to save that food to My Foods" }, { status: 500 });
+  }
+}
+
 export async function PUT(request: Request) {
   try {
     const payload = await request.json() as Record<string, unknown>;

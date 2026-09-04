@@ -18,9 +18,13 @@ total carbohydrates, fiber, and net carbohydrates.
   alongside total fat, each optional and stored in grams. A value that was
   never recorded stays unknown and is shown as "Not available", never as 0 g.
   Tapping the Fat card on the diary opens the day's breakdown.
+- Carbohydrate card on the diary showing total carbohydrates and net
+  carbohydrates side by side, either readable without opening anything.
+  Tapping it opens the day's carbohydrate breakdown.
 - Fractional servings that scale the recorded nutrition
-- Editable calorie and macro goals, with an optional saturated-fat goal and a
-  live percentage beside each one as it is typed
+- Editable calorie and macro goals, with an optional saturated-fat goal, a
+  minimum and maximum net-carbohydrate goal, and a live percentage beside each
+  one as it is typed
 - Calorie shares and goal percentages in Settings, Reports, and both PDF
   exports, kept strictly apart: a share of calories is never presented as a
   goal percentage, fiber is reported against its gram goal rather than as a
@@ -36,7 +40,9 @@ total carbohydrates, fiber, and net carbohydrates.
   cycles with explicit start dates, Start and Resume Workout, per-set reps,
   weight, and cardio recording, and one linked entry in the activity diary for
   each finished workout
-- Weekly Reports page for calories consumed and recorded movement
+- Weekly Reports page for calories consumed and recorded movement, including a
+  seven-day nutrition trend of calories, total fat, total carbohydrates, and
+  fiber with a per-column grand total
 - Calendar page colouring each day against the calorie goal that applied on
   that day
 - Weight log holding one reading per day, with an optional note and the
@@ -47,6 +53,10 @@ total carbohydrates, fiber, and net carbohydrates.
   printable PDF or a structured JSON file for a chosen date range, plus a
   concise one-page summary PDF for a doctor from the Reports page
 - Automatic net-carb calculation
+- A warning before food or exercise is added to a day that has already passed,
+  offering to continue on that day or to jump back to today
+- Moving a saved food or activity to another day from its edit screen, copying
+  a diary food to today, and saving a diary food to My Foods
 - Date-by-date history
 - Per-user data ownership when authenticated user headers are available
 - Installable iPhone Home Screen experience
@@ -57,6 +67,67 @@ total carbohydrates, fiber, and net carbohydrates.
 Tapping the Nourish logo and title in the header reloads the page, for when
 Safari keeps showing a stale view of something just saved. It stays on the
 same address and works from the keyboard.
+
+### Adding to a day that has already passed
+
+Choosing Add Food or Add Exercise while an earlier day is on screen asks first,
+before any form opens. The question names the day being viewed and today, and
+offers two answers: continue on that day, or go back to today. Declining opens
+nothing and writes nothing, so there is never a half-started entry left behind.
+Today itself is never questioned, and a future date is deliberately left alone:
+the warning is about quietly logging into history, not about planning ahead.
+
+### Moving, copying, and saving one entry
+
+The Edit Food screen carries three separate operations.
+
+- **Save changes** updates that one entry. Changing its diary date moves it:
+  the same row is updated, so the entry keeps its identity and no copy is left
+  on the day it came from.
+- **Copy to Today** opens the ordinary Add Food form on today, prefilled with
+  whatever is on screen, edits included. Nothing is written until that form is
+  submitted, every field stays editable, and the entry it was copied from is
+  never touched. A copy does not tick "Save this to My Foods".
+- **Add to My Foods** saves a reusable food from the values on screen. It does
+  not move, copy, or alter the diary entry, and follows the same duplicate rule
+  the Add Food form already uses: a food already saved under the same name and
+  serving is updated rather than joined by a second copy.
+
+The Edit Activity screen has the same editable date, with the same rule: it is
+a move, never a copy.
+
+Every one of these is scoped to the profile that owns the record, so one
+profile can never move, copy from, or save the other's entries.
+
+### Carbohydrates on the diary
+
+The carbohydrate card shows total carbohydrates and net carbohydrates in two
+equal halves. Total carbohydrates deliberately have no goal, exactly as in the
+reports and both PDFs; net carbohydrates carry the progress bar, because that
+is the half with a configured goal.
+
+Tapping the card opens the breakdown: total carbohydrates, fiber, sugar
+alcohols, and net carbohydrates. Net carbohydrates are total carbohydrates
+minus fiber, worked out food by food so one food's fiber can never cancel
+another food's carbohydrate. The tracker records no sugar alcohols, so that row
+says so rather than showing a zero that would claim the foods contained none.
+
+### The net-carbohydrate goal range
+
+The net-carbohydrate goal is a minimum and a maximum, both in grams and both
+editable in Settings. A minimum of 0 means there is no floor, which is exactly
+how a single net-carb goal has always behaved.
+
+The minimum may not be higher than the maximum, and neither may be negative.
+An impossible range is reported as you type and refused on save, by the same
+check the API applies, so the two can never disagree.
+
+Progress is reported three ways, and being under the minimum is never described
+as success:
+
+- Below the minimum: how many grams are still needed to reach it.
+- Inside the range: that the day is within the target range.
+- Above the maximum: how many grams the day is over it.
 
 The application has seven sections, selected from the navigation under the
 header:
@@ -464,6 +535,11 @@ uses the binding behavior configured in `vite.config.ts`.
 ## Database
 
 The schema is in `db/schema.ts`. Generated SQL migrations are in `drizzle/`.
+`nutrition_goals.net_carbs_min` and `net_carbs_max` hold the net-carbohydrate
+range. The original `net_carbs` column is kept and is always written with the
+same value as the maximum, because a single net-carb goal has always meant a
+ceiling and every export, PDF, and older read path already understands that
+column.
 The `daily_goals` table holds one calorie goal per owner per day, which is
 what the Calendar grades against. The `weight_entries` and `journal_entries`
 tables each hold at most one row per owner per day, enforced by a unique index

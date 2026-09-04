@@ -12,7 +12,7 @@ import {
   dailyGoals, exerciseEntries, foodEntries, journalEntries,
   nutritionGoals, stepEntries, waterEntries, weightEntries,
 } from "../../../db/schema";
-import { type FatSubtype, fatSubtypeKeys, fatTotalsFrom } from "../../nutrition";
+import { type FatSubtype, fatSubtypeKeys, fatTotalsFrom, netCarbGoalsFrom, netCarbsFrom } from "../../nutrition";
 import { DEFAULT_CALORIE_GOAL } from "../daily-goal";
 import { profileFrom } from "../profile";
 
@@ -148,12 +148,20 @@ export async function GET(request: Request) {
 
     if (wants("goals")) {
       const saved = currentGoals?.[0];
+      // Read once through the shared helper, so a row written before the
+      // net-carb range existed still exports a usable maximum.
+      const netCarbGoals = netCarbGoalsFrom(saved);
       payload.goals = {
         // The settings in force when the export was taken.
         current: saved
           ? {
               calories: saved.calories, protein: roundTwo(saved.protein), fat: roundTwo(saved.fat),
-              netCarbs: roundTwo(saved.netCarbs), fiber: roundTwo(saved.fiber), waterOunces: roundTwo(saved.waterOunces),
+              // The maximum of the net-carb range, which is what the single
+              // `netCarbs` goal has always meant. Both ends travel as well.
+              netCarbs: netCarbGoals.max,
+              netCarbsMin: netCarbGoals.min,
+              netCarbsMax: netCarbGoals.max,
+              fiber: roundTwo(saved.fiber), waterOunces: roundTwo(saved.waterOunces),
               // Null when no saturated-fat goal has been set. There is still
               // deliberately no total-carbohydrate goal.
               saturatedFat: optionalTwo(saved.saturatedFat),
@@ -179,7 +187,7 @@ export async function GET(request: Request) {
         date: row.date,
         calories: roundTwo(row.calories), protein: roundTwo(row.protein), fat: roundTwo(row.fat),
         carbs: roundTwo(row.carbs), fiber: roundTwo(row.fiber),
-        netCarbs: Math.max(0, roundTwo(Number(row.carbs ?? 0) - Number(row.fiber ?? 0))),
+        netCarbs: netCarbsFrom(row.carbs ?? 0, row.fiber ?? 0),
         foodItems: Number(row.foodItems ?? 0),
         ...fat.subtotals,
         fatSubtypeEntries: fat.known,
@@ -189,7 +197,7 @@ export async function GET(request: Request) {
       date: row.date, meal: row.meal, name: row.name, serving: row.serving,
       calories: roundTwo(row.calories), protein: roundTwo(row.protein), fat: roundTwo(row.fat),
       carbs: roundTwo(row.carbs), fiber: roundTwo(row.fiber),
-      netCarbs: Math.max(0, roundTwo(Number(row.carbs) - Number(row.fiber))),
+      netCarbs: netCarbsFrom(row.carbs, row.fiber),
       // An entry saved before the fat breakdown existed exports these as null.
       ...Object.fromEntries(fatSubtypeKeys.map(key => [key, optionalTwo(row[key])])) as Record<FatSubtype, number | null>,
     }));

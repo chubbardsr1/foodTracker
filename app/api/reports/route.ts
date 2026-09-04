@@ -1,7 +1,10 @@
 import { and, asc, eq, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { exerciseEntries, foodEntries, nutritionGoals, stepEntries } from "../../../db/schema";
-import { type FatSubtype, type FatTotals, emptyFatTotals, fatSubtypeKeys, fatTotalsFrom, mergeFatTotals } from "../../nutrition";
+import {
+  type FatSubtype, type FatTotals,
+  emptyFatTotals, fatSubtypeKeys, fatTotalsFrom, mergeFatTotals, netCarbGoalsFrom, netCarbsFrom,
+} from "../../nutrition";
 import { profileFrom } from "../profile";
 
 const MAX_DAYS = 366;
@@ -95,7 +98,7 @@ export async function GET(request: Request) {
         date,
         calories: roundTwo(food?.calories ?? 0), protein: roundTwo(food?.protein ?? 0), fat: roundTwo(food?.fat ?? 0),
         carbs: roundTwo(food?.carbs ?? 0), fiber: roundTwo(food?.fiber ?? 0),
-        netCarbs: Math.max(0, roundTwo(Number(food?.carbs ?? 0) - Number(food?.fiber ?? 0))),
+        netCarbs: netCarbsFrom(food?.carbs ?? 0, food?.fiber ?? 0),
         items: Number(food?.items ?? 0),
         // The same rollup shape the diary screen and both PDFs use, so a day's
         // fat breakdown is never worked out two different ways.
@@ -151,9 +154,14 @@ export async function GET(request: Request) {
         [key, recorded.filter(day => day.fatDetail.known[key] > 0).length])) as Record<FatSubtype, number>,
     };
     const goal = goalRows[0];
+    // Read through the shared helper so a row written before the net-carb
+    // range existed still reports a usable maximum instead of a zero.
+    const netCarbs = netCarbGoalsFrom(goal);
     const goals = goal
       ? {
-          calories: goal.calories, protein: goal.protein, fat: goal.fat, netCarbs: goal.netCarbs,
+          calories: goal.calories, protein: goal.protein, fat: goal.fat,
+          // The maximum, which is what the single `netCarbs` goal always meant.
+          netCarbs: netCarbs.max, netCarbsMin: netCarbs.min, netCarbsMax: netCarbs.max,
           // Null when no saturated-fat goal has been set. Never a zero.
           saturatedFat: goal.saturatedFat ?? null, fiber: goal.fiber, waterOunces: goal.waterOunces,
         }

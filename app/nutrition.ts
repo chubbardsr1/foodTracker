@@ -306,6 +306,160 @@ export function fatCoverageNote(totals: FatTotals, noun = "food entries") {
 }
 
 /* -------------------------------------------------------------------------
+ * Carbohydrates
+ *
+ * Total carbohydrates are the primary figure, exactly as total fat is above.
+ * Net carbohydrates are derived from them, never stored, and never go below
+ * zero: a food whose fiber is recorded as higher than its total carbohydrate
+ * is a rounding artefact, not a negative amount of carbohydrate.
+ *
+ * The tracker records no sugar alcohols, so nothing is subtracted for them.
+ * If a sugar-alcohol column is ever added, this one function is the only place
+ * the calculation has to change.
+ * ---------------------------------------------------------------------- */
+
+/** The one net-carbohydrate calculation used everywhere: total carbs − fiber. */
+export function netCarbsFrom(carbs: unknown, fiber: unknown) {
+  const total = Number(carbs ?? 0);
+  const fibre = Number(fiber ?? 0);
+  if (!Number.isFinite(total)) return 0;
+  return Math.max(0, roundTwo(total - (Number.isFinite(fibre) ? fibre : 0)));
+}
+
+/** One record's carbohydrate figures, as the diary card and its dialog show them. */
+export type CarbRecord = { carbs: number; fiber: number };
+export type CarbTotals = {
+  carbs: number;
+  fiber: number;
+  netCarbs: number;
+  /** Records counted, so an empty day can say so rather than showing zeroes. */
+  records: number;
+  /**
+   * Grams of sugar alcohol subtracted from net carbs. Always null: the tracker
+   * has no field for them, so nothing is claimed either way.
+   */
+  sugarAlcohols: null;
+};
+
+/** Totals the day's carbohydrates once, for the card and the breakdown alike. */
+export function aggregateCarbs(records: Iterable<CarbRecord>): CarbTotals {
+  let carbs = 0;
+  let fiber = 0;
+  let netCarbs = 0;
+  let count = 0;
+  for (const record of records) {
+    count += 1;
+    const total = Number(record.carbs);
+    const fibre = Number(record.fiber);
+    if (Number.isFinite(total)) carbs += total;
+    if (Number.isFinite(fibre)) fiber += fibre;
+    // Summed entry by entry, so one food's fiber can never cancel out another
+    // food's carbohydrate.
+    netCarbs += netCarbsFrom(total, fibre);
+  }
+  return {
+    carbs: roundTwo(carbs), fiber: roundTwo(fiber), netCarbs: roundTwo(netCarbs),
+    records: count, sugarAlcohols: null,
+  };
+}
+
+/* -------------------------------------------------------------------------
+ * The net-carbohydrate goal range
+ *
+ * A minimum and a maximum, both in grams. A minimum of 0 means there is no
+ * floor, which is how the tracker behaved when there was one goal, and is what
+ * legacy rows are migrated to. Being under the minimum is never reported as
+ * success: it is reported as being under the minimum.
+ * ---------------------------------------------------------------------- */
+
+export type NetCarbGoals = { min: number; max: number };
+export const DEFAULT_NET_CARB_MAX = 25;
+
+export type NetCarbGoalsRead =
+  | { ok: true; value: NetCarbGoals }
+  | { ok: false; error: string };
+
+export const NET_CARB_RANGE_ERROR =
+  "The minimum net-carb goal cannot be more than the maximum.";
+export const NET_CARB_VALUE_ERROR =
+  "Net-carb goals must be grams, zero or more, and the maximum must be more than zero.";
+
+/**
+ * Reads a net-carb range off a request body or a settings form.
+ *
+ * A payload that only carries the old single `netCarbs` goal is accepted and
+ * read as a maximum with no minimum, so an older client, a saved shortcut, or
+ * a replayed request keeps working rather than failing validation.
+ */
+export function readNetCarbGoals(source: Record<string, unknown>): NetCarbGoalsRead {
+  const legacy = source.netCarbs;
+  const rawMin = source.netCarbsMin ?? source.netCarbMin;
+  const rawMax = source.netCarbsMax ?? source.netCarbMax ?? legacy;
+  const min = rawMin === undefined || rawMin === null || String(rawMin).trim() === "" ? 0 : Number(rawMin);
+  const max = Number(rawMax);
+  if (!Number.isFinite(min) || min < 0 || !Number.isFinite(max) || max <= 0) {
+    return { ok: false, error: NET_CARB_VALUE_ERROR };
+  }
+  if (min > max) return { ok: false, error: NET_CARB_RANGE_ERROR };
+  return { ok: true, value: { min: roundTwo(min), max: roundTwo(max) } };
+}
+
+/**
+ * The stored range for one profile, tolerating rows written before the range
+ * existed. A missing, null, or nonsense minimum reads as no floor, and a
+ * missing maximum falls back to the single goal that column replaced.
+ */
+export function netCarbGoalsFrom(goals: Record<string, unknown> | null | undefined): NetCarbGoals {
+  const legacy = Number(goals?.netCarbs ?? NaN);
+  const rawMax = Number(goals?.netCarbsMax ?? NaN);
+  const rawMin = Number(goals?.netCarbsMin ?? NaN);
+  const max = Number.isFinite(rawMax) && rawMax > 0
+    ? roundTwo(rawMax)
+    : Number.isFinite(legacy) && legacy > 0 ? roundTwo(legacy) : DEFAULT_NET_CARB_MAX;
+  const min = Number.isFinite(rawMin) && rawMin > 0 ? roundTwo(rawMin) : 0;
+  // A legacy row can hold a minimum above a maximum only if it was written
+  // outside this application. Clamping keeps the screen readable either way.
+  return { min: Math.min(min, max), max };
+}
+
+/** "100 to 150 g", or just "150 g" when no minimum is configured. */
+export function netCarbGoalLabel(goals: NetCarbGoals) {
+  return goals.min > 0 ? `${amount(goals.min)} to ${amount(goals.max)} g` : `${amount(goals.max)} g`;
+}
+
+export type NetCarbProgress = {
+  state: "below" | "within" | "above";
+  /** Grams still needed to reach the minimum, or grams past the maximum. */
+  grams: number;
+  /** One short phrase for the diary card. */
+  summary: string;
+};
+
+/**
+ * Where an amount of net carbs sits against the configured range.
+ *
+ * Under the minimum is reported as under the minimum, never as being "on
+ * track" merely because the number is small.
+ */
+export function netCarbProgress(value: number, goals: NetCarbGoals): NetCarbProgress {
+  const eaten = Number.isFinite(value) ? value : 0;
+  if (goals.min > 0 && eaten < goals.min) {
+    const grams = roundTwo(goals.min - eaten);
+    return { state: "below", grams, summary: `${amount(grams)}g to reach the ${amount(goals.min)}g minimum` };
+  }
+  if (eaten > goals.max) {
+    const grams = roundTwo(eaten - goals.max);
+    return { state: "above", grams, summary: `${amount(grams)}g over the ${amount(goals.max)}g maximum` };
+  }
+  const grams = roundTwo(goals.max - eaten);
+  return {
+    state: "within",
+    grams,
+    summary: goals.min > 0 ? `Within your ${netCarbGoalLabel(goals)} range` : `${amount(grams)}g left`,
+  };
+}
+
+/* -------------------------------------------------------------------------
  * Calorie shares and goal percentages
  *
  * Two different ideas live here and are never mixed:
@@ -386,11 +540,23 @@ export type GoalValues = {
   calories: number | null;
   protein: number | null;
   fat: number | null;
+  /** The maximum of the net-carb range, kept for every existing read path. */
   netCarbs: number | null;
+  /** The range itself. Absent on data written before the range existed. */
+  netCarbsMin?: number | null;
+  netCarbsMax?: number | null;
   fiber: number | null;
   saturatedFat: number | null;
   waterOunces?: number | null;
 };
+
+/** The maximum of the range, falling back to the single goal it replaced. */
+function netCarbCeiling(goals: Partial<GoalValues>): number | null {
+  const max = goals.netCarbsMax ?? null;
+  if (max !== null && Number.isFinite(Number(max)) && Number(max) > 0) return Number(max);
+  const legacy = goals.netCarbs ?? null;
+  return legacy !== null && Number.isFinite(Number(legacy)) ? Number(legacy) : null;
+}
 
 export const goalKeys = ["calories", "netCarbs", "protein", "fat", "saturatedFat", "fiber", "waterOunces"] as const;
 export type GoalKey = typeof goalKeys[number];
@@ -420,7 +586,9 @@ export const goalLabels: Record<GoalKey, string> = {
 export function goalContext(goals: Partial<GoalValues>): Record<GoalKey, string> {
   const calories = goals.calories ?? null;
   const protein = caloriePercent(goals.protein, calories, caloriesPerGram.protein);
-  const netCarbs = caloriePercent(goals.netCarbs, calories, caloriesPerGram.carbs);
+  // Worked out against the maximum of the range: that is the figure a day is
+  // judged against, and the one the single goal always meant.
+  const netCarbs = caloriePercent(netCarbCeiling(goals), calories, caloriesPerGram.carbs);
   const fat = caloriePercent(goals.fat, calories, caloriesPerGram.fat);
   const saturated = caloriePercent(goals.saturatedFat, calories, caloriesPerGram.fat);
   const saturatedShare = percentOf(goals.saturatedFat ?? null, goals.fat ?? null);
@@ -449,6 +617,14 @@ export type GoalRow = { key: GoalKey; label: string; target: string; context: st
 export function goalRows(goals: Partial<GoalValues>): GoalRow[] {
   const context = goalContext(goals);
   const target = (key: GoalKey) => {
+    // Net carbs are a range, so the target column prints both ends of it. A
+    // profile with no minimum still prints the single figure it always did.
+    if (key === "netCarbs") {
+      const ceiling = netCarbCeiling(goals);
+      if (ceiling === null) return "not set";
+      const floor = Number(goals.netCarbsMin ?? 0);
+      return netCarbGoalLabel({ min: Number.isFinite(floor) && floor > 0 ? floor : 0, max: ceiling });
+    }
     const value = goals[key];
     if (value === null || value === undefined || !Number.isFinite(Number(value))) return "not set";
     if (key === "calories") return `${Math.round(Number(value)).toLocaleString("en-US")} per day`;
@@ -534,6 +710,14 @@ export function nutritionRows(input: {
       : `${Math.round(Number(value) * 100) / 100} g`;
   const perDay = (subtotal: number | null) =>
     subtotal === null || recordedDays <= 0 ? null : subtotal / recordedDays;
+  // The net-carb goal is a range. Both ends are read once here so the row
+  // below and its context cannot disagree about which figure they mean.
+  const netCarbCeilingValue = netCarbCeiling(goals ?? {});
+  const rawFloor = Number(goals?.netCarbsMin ?? 0);
+  const netCarbFloor = Number.isFinite(rawFloor) && rawFloor > 0 ? rawFloor : 0;
+  const goalRange = netCarbCeilingValue === null
+    ? "no goal"
+    : netCarbGoalLabel({ min: netCarbFloor, max: netCarbCeilingValue });
 
   /** Assembles one row, joining the pieces for the single-column surfaces. */
   const build = (row: Omit<NutritionRow, "context" | "calorieShare" | "goalContext" | "coverage">
@@ -572,10 +756,19 @@ export function nutritionRows(input: {
       key: "netCarbs",
       metric: "Net carbohydrates",
       average: formatGrams(averages.netCarbs),
-      goal: goalGrams(goals?.netCarbs),
+      // A range when one is configured, otherwise the single ceiling it
+      // always was. Never "no goal" while a maximum exists.
+      goal: netCarbCeiling(goals ?? {}) === null ? "no goal" : goalRange,
       // Labelled a calorie-equivalent, never the carbohydrate share of calories.
       calorieShare: share(averages.netCarbs, caloriesPerGram.carbs, "calorie-equivalent"),
-      goalContext: against(averages.netCarbs, goals?.netCarbs),
+      goalContext: join(
+        against(averages.netCarbs, netCarbCeiling(goals ?? {}), netCarbFloor > 0 ? "of maximum" : "of goal"),
+        // Being under a configured minimum is said plainly rather than left to
+        // read as success.
+        netCarbFloor > 0 && averages.netCarbs < netCarbFloor
+          ? `below the ${amount(netCarbFloor)} g minimum`
+          : "",
+      ),
     }),
     build({
       key: "fiber",

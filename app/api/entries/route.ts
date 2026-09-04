@@ -71,6 +71,14 @@ export async function POST(request: Request) {
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to save food" }, { status: 500 }); }
 }
 
+/**
+ * Corrects one diary entry, and moves it to another day when a date is sent.
+ *
+ * `eatenOn` is only touched when the field is actually present, so a client
+ * that never sends one cannot move an entry by accident. Moving updates the
+ * one existing row — the entry keeps its id and is never copied to the new day
+ * and left behind on the old one.
+ */
 export async function PUT(request: Request) {
   try {
     const payload = await request.json() as Record<string, unknown>;
@@ -78,17 +86,34 @@ export async function PUT(request: Request) {
     const name = String(payload.name ?? "").trim(); const serving = String(payload.serving ?? "").trim(); const meal = String(payload.meal ?? "");
     const nutrition = { calories: numberValue(payload.calories), protein: numberValue(payload.protein), fat: numberValue(payload.fat), carbs: numberValue(payload.carbs), fiber: numberValue(payload.fiber) };
     if (!Number.isInteger(id) || !name || !serving || !validMeals.has(meal) || Object.values(nutrition).some(value => !Number.isFinite(value) || value < 0)) return Response.json({ error: "Please complete every field with a valid value" }, { status: 400 });
+    // A plain local calendar date, exactly as it is stored. Nothing is parsed
+    // into a Date here, so no timezone can shift the entry a day either way.
+    const eatenOn = payload.eatenOn === undefined || payload.eatenOn === null ? null : String(payload.eatenOn).trim();
+    if (eatenOn !== null && !/^\d{4}-\d{2}-\d{2}$/.test(eatenOn)) {
+      return Response.json({ error: "Choose a valid diary date for this entry" }, { status: 400 });
+    }
     // Editing one entry edits only that entry, subtypes included. A field left
     // blank clears back to unknown rather than to zero.
     const fatDetail = readFatBreakdown(payload);
     if (!fatDetail.ok) return Response.json({ error: fatFieldError(fatDetail.field) }, { status: 400 });
     const fatProblem = fatBreakdownProblem(nutrition.fat, fatDetail.value);
     if (fatProblem) return Response.json({ error: fatProblem }, { status: 400 });
-    const [entry] = await getDb().update(foodEntries).set({ meal, name, serving, ...nutrition, ...fatDetail.value })
-      .where(and(eq(foodEntries.id, id), eq(foodEntries.owner, profileFrom(request))))
+    const db = getDb();
+    const owner = profileFrom(request);
+    // Read first, so the response can say which day the entry came from and
+    // the diary can take it off the day it is no longer on.
+    const [before] = await db.select({ eatenOn: foodEntries.eatenOn }).from(foodEntries)
+      .where(and(eq(foodEntries.id, id), eq(foodEntries.owner, owner))).limit(1);
+    if (!before) return Response.json({ error: "Diary entry was not found" }, { status: 404 });
+    const [entry] = await db.update(foodEntries)
+      .set({ meal, name, serving, ...nutrition, ...fatDetail.value, ...(eatenOn ? { eatenOn } : {}) })
+      .where(and(eq(foodEntries.id, id), eq(foodEntries.owner, owner)))
       .returning();
     if (!entry) return Response.json({ error: "Diary entry was not found" }, { status: 404 });
-    return Response.json({ entry });
+    // The day it moved to needs a calorie goal stamped on it just as much as a
+    // day something was added to. The day it left keeps the stamp it had.
+    if (eatenOn && eatenOn !== before.eatenOn) await stampDailyGoal(db, owner, eatenOn);
+    return Response.json({ entry, movedFrom: before.eatenOn, moved: Boolean(eatenOn) && eatenOn !== before.eatenOn });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to update food" }, { status: 500 }); }
 }
 

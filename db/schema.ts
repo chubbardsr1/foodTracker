@@ -23,7 +23,18 @@ export const nutritionGoals = sqliteTable("nutrition_goals", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   owner: text("owner").notNull(), calories: integer("calories").notNull().default(1600),
   protein: real("protein").notNull().default(110), fat: real("fat").notNull().default(105),
+  /**
+   * The net-carbohydrate goal is a range, not a single figure.
+   *
+   * `netCarbs` is the original single goal and is kept in step with
+   * `netCarbsMax`, because a single net-carb goal has always meant a ceiling.
+   * Every export, PDF, and older read path still understands that column, so
+   * it is never left behind the range. A minimum of 0 means "no floor", which
+   * is how every profile behaved before the range existed.
+   */
   netCarbs: real("net_carbs").notNull().default(25),
+  netCarbsMin: real("net_carbs_min").notNull().default(0),
+  netCarbsMax: real("net_carbs_max").notNull().default(25),
   // Optional, unlike every other goal here. Null means no saturated-fat goal
   // has been set, so no percentage is worked out against it. There is
   // deliberately no total-carbohydrate goal.

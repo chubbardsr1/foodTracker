@@ -102,7 +102,9 @@ export type JournalSummary = { entries: number; dates: number };
 
 export type GoalSummary = {
   calories: number; protein: number; fat: number;
-  netCarbs: number; fiber: number; waterOunces: number;
+  /** The maximum of the net-carb range; `netCarbsMin` is 0 when there is no minimum. */
+  netCarbs: number; netCarbsMin?: number; netCarbsMax?: number;
+  fiber: number; waterOunces: number;
   /** Optional and nullable: null means no saturated-fat goal has been set. */
   saturatedFat?: number | null;
 } | null;

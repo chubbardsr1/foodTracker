@@ -4,11 +4,17 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import ExportPanel from "./export-panel";
 import { exportSections as allExportSections } from "./export-shared";
 import {
-  type FatBreakdown, type FatTotals,
-  type NutritionAverages, type NutritionRow,
-  CALORIE_SHARE_NOTE, CURRENT_GOALS_NOTE, UNKNOWN_FAT_LABEL, aggregateFat, emptyFatTotals,
+  type AddKind, type FoodValues,
+  copyOfEntry, isPastDate, pastDateWarning, savedFoodFrom,
+} from "./diary-actions";
+import {
+  type CarbTotals, type FatBreakdown, type FatTotals,
+  type NetCarbGoals, type NutritionAverages, type NutritionRow,
+  CALORIE_SHARE_NOTE, CURRENT_GOALS_NOTE, UNKNOWN_FAT_LABEL,
+  aggregateCarbs, aggregateFat, emptyFatTotals,
   fatCoverageNote, fatSubtypeKeys, fatSubtypeLabels, fatSubtypeShortLabels, goalContext,
-  gramsOrUnknown, hasFatDetail, nutritionRows, unclassifiedFat,
+  gramsOrUnknown, hasFatDetail, netCarbGoalLabel, netCarbGoalsFrom, netCarbProgress,
+  nutritionRows, readNetCarbGoals, unclassifiedFat,
 } from "./nutrition";
 import {
   type Profile, addDays, amount, lastCompleteDays, localDate, longDate, mediumDate,
@@ -31,7 +37,7 @@ type JournalEntry = { id: number; entryOn: string; body: string; source: string;
 type Food = { id: number; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; barcode?: string | null } & FatBreakdown;
 /** Prefill for the Add Food form. Missing nutrition stays undefined so the field renders empty. */
 type Draft = { id?: number; name: string; serving: string; calories?: number; protein?: number; fat?: number; carbs?: number; fiber?: number; barcode?: string | null } & Partial<FatBreakdown>;
-type Source = "manual" | "saved" | "barcode" | "ai";
+type Source = "manual" | "saved" | "barcode" | "ai" | "copy";
 type MealEstimate = {
   foodName: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number;
   assumptions: string[]; confidence: string; warnings: string[];
@@ -51,8 +57,14 @@ type ScannedProduct = {
   missingFatDetail: string[];
   missing: string[]; source: string; attribution: string;
 } & FatBreakdown;
-/** `saturatedFat` is the one optional goal: null means none has been set. */
-type Goals = { calories: number; protein: number; fat: number; netCarbs: number; saturatedFat: number | null; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number };
+/**
+ * `saturatedFat` is the one optional goal: null means none has been set.
+ *
+ * The net-carb goal is a range. `netCarbs` is kept as the maximum, which is
+ * what the single goal has always meant, so anything still reading that one
+ * field reads the ceiling rather than nothing.
+ */
+type Goals = { calories: number; protein: number; fat: number; netCarbs: number; netCarbsMin: number; netCarbsMax: number; saturatedFat: number | null; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number };
 type View = "diary" | "foods" | "reports" | "calendar" | "weight" | "journal" | "workouts";
 type CalendarDay = {
   date: string; calories: number; items: number; goalCalories: number; goalSource: "saved" | "current";
@@ -65,11 +77,11 @@ type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalorie
 /** Averages over the days holding at least one food entry, from the reports feed. */
 type ReportNutrition = { recordedDays: number; averages: NutritionAverages; subtypeDays: Partial<Record<string, number>> };
 /** The goals in force now. `saturatedFat` is null when none has been set. */
-type ReportGoals = { calories: number; protein: number; fat: number; netCarbs: number; saturatedFat: number | null; fiber: number; waterOunces: number };
+type ReportGoals = { calories: number; protein: number; fat: number; netCarbs: number; netCarbsMin?: number; netCarbsMax?: number; saturatedFat: number | null; fiber: number; waterOunces: number };
 type ReportAverages = { caloriesPerDay: number; caloriesPerLoggedDay: number; exerciseMinutesPerDay: number; stepsPerRecordedDay: number };
 
 const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
-const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, saturatedFat: null, fiber: 25, waterOunces: 64, waterShortcutOne: 6, waterShortcutTwo: 8, waterShortcutThree: 12 };
+const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, netCarbsMin: 0, netCarbsMax: 25, saturatedFat: null, fiber: 25, waterOunces: 64, waterShortcutOne: 6, waterShortcutTwo: 8, waterShortcutThree: 12 };
 const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "diary", label: "Diary", title: "Nourish", eyebrow: "Daily Food Tracker" },
   { id: "foods", label: "My Foods", title: "My Foods", eyebrow: "Reusable entries" },
@@ -134,7 +146,12 @@ export default function FoodTracker() {
   const [goals, setGoals] = useState<Goals>(defaultGoals);
   const [loading, setLoading] = useState(true);
   // `locked` is true when the meal is already known, e.g. the + on a meal card.
-  const [addTarget, setAddTarget] = useState<{ meal: Meal; locked: boolean } | null>(null);
+  // `date` travels with the target rather than being read from `date` above,
+  // so a copy to today lands on today even while a past day is on screen.
+  const [addTarget, setAddTarget] = useState<{ meal: Meal; locked: boolean; date: string; prefill?: FoodValues; copiedFrom?: string } | null>(null);
+  // Set while the warning about a past day is on screen. Nothing is opened and
+  // nothing is written until it is answered.
+  const [pendingAdd, setPendingAdd] = useState<{ kind: AddKind; date: string; meal: Meal; locked: boolean } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customWaterOpen, setCustomWaterOpen] = useState(false);
   const [exerciseOpen, setExerciseOpen] = useState(false);
@@ -145,6 +162,7 @@ export default function FoodTracker() {
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [message, setMessage] = useState("");
   const [fatDetailOpen, setFatDetailOpen] = useState(false);
+  const [carbDetailOpen, setCarbDetailOpen] = useState(false);
   // Bumped on every copy so the same confirmation can be shown twice running.
   const [copyNote, setCopyNote] = useState<{ id: number; text: string } | null>(null);
 
@@ -202,6 +220,11 @@ export default function FoodTracker() {
    * reports and both PDFs use. Total fat above is unaffected by it.
    */
   const fatDetail = useMemo(() => aggregateFat(entries), [entries]);
+  /** The day's carbohydrates, from the one shared aggregation. */
+  const carbDetail = useMemo(() => aggregateCarbs(entries), [entries]);
+  /** The configured net-carb range, tolerant of goals saved before it existed. */
+  const netCarbGoals = useMemo(() => netCarbGoalsFrom(goals), [goals]);
+  const netCarbStanding = useMemo(() => netCarbProgress(carbDetail.netCarbs, netCarbGoals), [carbDetail.netCarbs, netCarbGoals]);
   const waterTotal = water.reduce((sum, item) => sum + item.ounces, 0);
   const exerciseMinutes = exercise.reduce((sum, item) => sum + item.minutes, 0);
   const exerciseCalories = exercise.reduce((sum, item) => sum + item.calories, 0);
@@ -214,7 +237,8 @@ export default function FoodTracker() {
       longDate(date),
       "",
       `Calories: ${Math.round(totals.calories)} of ${goals.calories} (${over > 0 ? `${Math.round(over)} over` : `${Math.round(-over)} remaining`})`,
-      `Net carbs: ${round(totals.netCarbs)}g of ${goals.netCarbs}g`,
+      `Total carbs: ${round(totals.carbs)}g`,
+      `Net carbs: ${round(totals.netCarbs)}g of ${netCarbGoalLabel(netCarbGoals)} — ${netCarbStanding.summary}`,
       `Protein: ${round(totals.protein)}g of ${goals.protein}g`,
       `Fat: ${round(totals.fat)}g of ${goals.fat}g`,
       // Indented under Fat, and only when something actually recorded a
@@ -267,6 +291,45 @@ export default function FoodTracker() {
     setEntries([]); setWater([]); setExercise([]); setSteps(null); setGoals(defaultGoals); setProfile(next);
   }
   function shiftDate(days: number) { setDate(addDays(date, days)); }
+
+  /**
+   * Opens the Add Food form, or asks first when the diary is showing a day
+   * that has already passed.
+   *
+   * Today is read from the clock at the moment of the tap rather than from a
+   * value captured at render, so a page left open across midnight warns about
+   * the day that has just become yesterday instead of staying silent.
+   */
+  function requestAddFood(meal: Meal, locked: boolean) {
+    const today = localDate();
+    if (isPastDate(date, today)) { setPendingAdd({ kind: "food", date, meal, locked }); return; }
+    setAddTarget({ meal, locked, date });
+  }
+  function requestAddExercise() {
+    const today = localDate();
+    if (isPastDate(date, today)) { setPendingAdd({ kind: "exercise", date, meal: defaultMealForNow(), locked: false }); return; }
+    setExerciseOpen(true);
+  }
+  /** "Yes, add to <day>" — carry on into the normal form, on that same day. */
+  function confirmPastAdd() {
+    if (!pendingAdd) return;
+    const target = pendingAdd;
+    setPendingAdd(null);
+    if (target.kind === "food") setAddTarget({ meal: target.meal, locked: target.locked, date: target.date });
+    else setExerciseOpen(true);
+  }
+  /**
+   * "No, go to today" — the add is abandoned and the diary moves to today.
+   *
+   * No form is opened and nothing is written, so there is never a half-started
+   * entry left behind. The date change reloads the day through the effect that
+   * already watches it, so no browser reload is needed.
+   */
+  function cancelPastAdd() {
+    setPendingAdd(null);
+    setAddTarget(null);
+    setDate(localDate());
+  }
   async function removeEntry(id: number) {
     const response = await fetch(`/api/entries?id=${id}`, { method: "DELETE", headers });
     if (response.ok) setEntries(current => current.filter(item => item.id !== id));
@@ -334,8 +397,8 @@ export default function FoodTracker() {
         <div className="calorie-ring" style={{ "--progress": `${Math.min(100, totals.calories / goals.calories * 100)}%` } as React.CSSProperties}><div><strong>{Math.round(totals.calories)}</strong><span>of {goals.calories}</span></div></div>
         <div className="summary-copy"><span>CALORIES</span><strong>{Math.max(0, Math.round(goals.calories - totals.calories))} remaining</strong><small>{totals.calories > goals.calories ? `${Math.round(totals.calories - goals.calories)} over goal` : "You’re on track"}</small></div>
       </section>
+      <CarbCard totals={carbDetail} goals={netCarbGoals} standing={netCarbStanding} onOpen={() => setCarbDetailOpen(true)} />
       <section className="macro-grid">
-        <Macro label="Net carbs" value={round(totals.netCarbs)} goal={goals.netCarbs} color="purple" />
         <Macro label="Protein" value={round(totals.protein)} goal={goals.protein} color="coral" />
         <Macro label="Fat" value={round(totals.fat)} goal={goals.fat} color="gold"
           onOpen={() => setFatDetailOpen(true)} openLabel="Show today's fat breakdown" />
@@ -346,7 +409,7 @@ export default function FoodTracker() {
         <small aria-live="polite">{copyNote?.text ?? ""}</small>
       </div>
       <section className="exercise-card">
-        <div className="exercise-heading"><div className="exercise-icon">↗</div><div><p className="eyebrow">Movement</p><h2>{round(exerciseMinutes)} <small>minutes</small></h2></div><button onClick={() => setExerciseOpen(true)}>+ Add exercise</button></div>
+        <div className="exercise-heading"><div className="exercise-icon">↗</div><div><p className="eyebrow">Movement</p><h2>{round(exerciseMinutes)} <small>minutes</small></h2></div><button onClick={() => requestAddExercise()}>+ Add exercise</button></div>
         <p className="exercise-summary">{exerciseCalories > 0 ? `${Math.round(exerciseCalories)} estimated calories burned` : exercise.length > 0 ? "Exercise logged for today" : "No exercise logged yet"}</p>
         {exercise.length > 0 && <div className="exercise-history">{exercise.map(item => <div key={item.id}>
           <span>
@@ -374,21 +437,59 @@ export default function FoodTracker() {
           const items = entries.filter(entry => entry.meal === meal);
           const calories = items.reduce((sum, item) => sum + item.calories, 0);
           return <article className="meal-card" key={meal}>
-            <div className="meal-title"><div className={`meal-icon ${meal.toLowerCase()}`}>{meal === "Breakfast" ? "☀" : meal === "Lunch" ? "◐" : meal === "Dinner" ? "☾" : "✦"}</div><div><h3>{meal}</h3><span>{Math.round(calories)} calories</span></div><button onClick={() => setAddTarget({ meal, locked: true })} aria-label={`Add food to ${meal}`}>+</button></div>
-            {items.length === 0 ? <button className="empty-meal" onClick={() => setAddTarget({ meal, locked: true })}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{round(item.calories)}</b><button onClick={() => setEditingEntry(item)} aria-label={`Edit ${item.name}`}>✎</button><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
+            <div className="meal-title"><div className={`meal-icon ${meal.toLowerCase()}`}>{meal === "Breakfast" ? "☀" : meal === "Lunch" ? "◐" : meal === "Dinner" ? "☾" : "✦"}</div><div><h3>{meal}</h3><span>{Math.round(calories)} calories</span></div><button onClick={() => requestAddFood(meal, true)} aria-label={`Add food to ${meal}`}>+</button></div>
+            {items.length === 0 ? <button className="empty-meal" onClick={() => requestAddFood(meal, true)}>Add your first food</button> : items.map(item => <div className="food-row" key={item.id}><div><strong>{item.name}</strong><span>{item.serving} · {round(item.carbs - item.fiber)}g net carbs</span></div><b>{round(item.calories)}</b><button onClick={() => setEditingEntry(item)} aria-label={`Edit ${item.name}`}>✎</button><button onClick={() => void removeEntry(item.id)} aria-label={`Remove ${item.name}`}>×</button></div>)}
           </article>;
         })}
       </section>
-      <button className="floating-add" onClick={() => setAddTarget({ meal: defaultMealForNow(), locked: false })}><span>＋</span> Add food</button>
+      <button className="floating-add" onClick={() => requestAddFood(defaultMealForNow(), false)}><span>＋</span> Add food</button>
     </>}
 
-    {addTarget && <AddFood meal={addTarget.meal} mealLocked={addTarget.locked} date={date} profile={profile} foodsVersion={savedFoodsVersion} onClose={() => setAddTarget(null)} onSaved={(entry) => { setEntries(current => [...current, entry]); setAddTarget(null); }} />}
+    {addTarget && <AddFood meal={addTarget.meal} mealLocked={addTarget.locked} date={addTarget.date} profile={profile}
+      foodsVersion={savedFoodsVersion} prefill={addTarget.prefill} copiedFrom={addTarget.copiedFrom}
+      onClose={() => setAddTarget(null)}
+      onSaved={(entry) => {
+        // A copy saved onto today while a past day is on screen belongs to a
+        // day this list is not showing, so it is announced rather than added
+        // to the wrong day.
+        if (entry.eatenOn === date) setEntries(current => [...current, entry]);
+        else setCopyNote(current => ({ id: (current?.id ?? 0) + 1, text: `Added “${entry.name}” to ${longDate(entry.eatenOn)}.` }));
+        setAddTarget(null);
+      }} />}
     {settingsOpen && <SettingsEditor goals={goals} profile={profile} onClose={() => setSettingsOpen(false)} onSaved={(next) => { setGoals(next); setSettingsOpen(false); }} />}
     {customWaterOpen && <CustomWater onClose={() => setCustomWaterOpen(false)} onAdd={(ounces) => { void addWater(ounces); setCustomWaterOpen(false); }} />}
     {exerciseOpen && <AddExercise date={date} profile={profile} onClose={() => setExerciseOpen(false)} onSaved={(entry) => { setExercise(current => [...current, entry]); setExerciseOpen(false); }} />}
-    {editingExercise && <EditExercise entry={editingExercise} profile={profile} onClose={() => setEditingExercise(null)} onSaved={(entry) => { setExercise(current => current.map(item => item.id === entry.id ? entry : item)); setEditingExercise(null); }} />}
+    {editingExercise && <EditExercise entry={editingExercise} profile={profile} onClose={() => setEditingExercise(null)}
+      onSaved={(entry) => {
+        // Moved to another day: it leaves this day's list rather than sitting
+        // in it showing someone else's date.
+        setExercise(current => entry.exercisedOn === date
+          ? current.map(item => item.id === entry.id ? entry : item)
+          : current.filter(item => item.id !== entry.id));
+        if (entry.exercisedOn !== date) setMessage(`“${entry.activity}” moved to ${longDate(entry.exercisedOn)}.`);
+        setEditingExercise(null);
+      }} />}
     {fatDetailOpen && <FatBreakdownDialog totals={fatDetail} goal={goals.fat} onClose={() => setFatDetailOpen(false)} />}
-    {editingEntry && <EditDiaryEntry entry={editingEntry} profile={profile} onClose={() => setEditingEntry(null)} onSaved={(entry) => { setEntries(current => current.map(item => item.id === entry.id ? entry : item)); setEditingEntry(null); }} />}
+    {carbDetailOpen && <CarbBreakdownDialog totals={carbDetail} goals={netCarbGoals} standing={netCarbStanding} onClose={() => setCarbDetailOpen(false)} />}
+    {editingEntry && <EditDiaryEntry entry={editingEntry} profile={profile}
+      onClose={() => setEditingEntry(null)}
+      onFoodsChanged={() => setSavedFoodsVersion(current => current + 1)}
+      onCopyToToday={(values, meal) => {
+        // The edit closes and the ordinary Add Food form opens on today,
+        // prefilled. Nothing is written until that form is submitted, and the
+        // entry being copied is not touched either way.
+        setEditingEntry(null);
+        setAddTarget({ meal, locked: false, date: localDate(), prefill: values, copiedFrom: editingEntry.eatenOn });
+      }}
+      onSaved={(entry) => {
+        setEntries(current => entry.eatenOn === date
+          ? current.map(item => item.id === entry.id ? entry : item)
+          : current.filter(item => item.id !== entry.id));
+        if (entry.eatenOn !== date) setMessage(`“${entry.name}” moved to ${longDate(entry.eatenOn)}.`);
+        setEditingEntry(null);
+      }} />}
+    {pendingAdd && <PastDateWarning kind={pendingAdd.kind} date={pendingAdd.date}
+      onConfirm={confirmPastAdd} onCancel={cancelPastAdd} />}
   </main>;
 }
 
@@ -528,6 +629,48 @@ function ConfirmDeleteFood({ food, onClose, onConfirm }: { food: Food; onClose: 
       <button type="button" className="primary danger" onClick={() => void confirm()} disabled={busy}>{busy ? "Deleting…" : "Delete food"}</button>
     </div>
   </div></div>;
+}
+
+/**
+ * Asked before anything is started on a day that has already passed.
+ *
+ * Built from the same confirmation pattern as `ConfirmDeleteFood`, so it is a
+ * real dialog rather than a native `confirm()`: the day is named in the
+ * question and on the button, Escape and the backdrop both cancel, and neither
+ * answer writes anything. "No, go to today" is the cancel action, so closing
+ * the dialog any other way simply abandons the add and leaves the diary where
+ * it was rather than silently moving it.
+ */
+function PastDateWarning({ kind, date, onConfirm, onCancel }: {
+  kind: AddKind; date: string; onConfirm: () => void; onCancel: () => void;
+}) {
+  const panel = useRef<HTMLDivElement | null>(null);
+  const warning = pastDateWarning(kind, date);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    panel.current?.focus();
+    function keyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); onCancel(); }
+    }
+    document.addEventListener("keydown", keyDown);
+    return () => { document.removeEventListener("keydown", keyDown); opener?.focus?.(); };
+  }, [onCancel]);
+
+  return <div className="modal-backdrop" onMouseDown={onCancel}>
+    <div className="modal compact" ref={panel} tabIndex={-1} onMouseDown={event => event.stopPropagation()}
+      role="dialog" aria-modal="true" aria-labelledby="past-date-title" aria-describedby="past-date-message">
+      <div className="modal-head">
+        <div><p className="eyebrow">Check the date</p><h2 id="past-date-title">{warning.title}</h2></div>
+        <button onClick={onCancel} aria-label="Close">×</button>
+      </div>
+      <p className="confirm-target"><strong>{longDate(date)}</strong><span>Today is {longDate(localDate())}</span></p>
+      <p className="confirm-help" id="past-date-message">{warning.message}</p>
+      <div className="scanner-actions">
+        <button type="button" className="secondary" onClick={onCancel}>{warning.cancelLabel}</button>
+        <button type="button" className="primary" onClick={onConfirm} autoFocus>{warning.confirmLabel}</button>
+      </div>
+    </div>
+  </div>;
 }
 
 function CalendarPage({ profile, onOpenDay }: { profile: Profile; onOpenDay: (date: string) => void }) {
@@ -745,6 +888,8 @@ function ReportsPage({ profile }: { profile: Profile }) {
 
       <NutritionAveragesTable nutrition={nutrition} fat={totals?.fatDetail ?? emptyFatTotals()} goals={reportGoals} />
 
+      <SevenDayNutritionTrend key={profile} profile={profile} />
+
       {days.some(day => (day.movement ?? []).length > 0) && <div className="report-movement">
         <h3>Movement log</h3>
         <p className="page-help">Each recorded activity in this range, with the comments saved against it.</p>
@@ -759,6 +904,95 @@ function ReportsPage({ profile }: { profile: Profile }) {
       </div>}
     </>}
   </section>;
+}
+
+/**
+ * The rolling seven-day nutrition trend.
+ *
+ * It keeps its own range rather than following the pickers above, because it
+ * is defined as the last seven completed days: it ends on yesterday and never
+ * includes today, the rule every automatic range in this application follows
+ * (see `lastCompleteDays`). A part-finished day would pull every figure down
+ * and make the trend read as a fall that never happened.
+ *
+ * Days with nothing logged still appear, showing zeros, exactly as the range
+ * table above does. Rows run oldest to newest, as everywhere else here.
+ *
+ * The grand total sums each column down its own units. Calories and grams are
+ * never added together into one number, and there is deliberately no total of
+ * the totals.
+ */
+function SevenDayNutritionTrend({ profile }: { profile: Profile }) {
+  // Read once per mount, so a page left open overnight still reports against
+  // the day that has just ended rather than a stale one.
+  const [range] = useState(() => lastCompleteDays(7));
+  const [days, setDays] = useState<ReportDay[] | null>(null);
+  const [error, setError] = useState("");
+  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
+
+  // Keyed on the profile by its caller, so switching profile remounts this
+  // with empty state rather than needing a synchronous reset in the effect.
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/reports?start=${range.start}&end=${range.end}`, { headers })
+      .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? "Unable to build the seven-day trend"); return data; })
+      .then(data => { if (active) setDays(data.days ?? []); })
+      .catch(reason => { if (active) { setError(reason instanceof Error ? reason.message : "Unable to build the seven-day trend"); setDays([]); } });
+    return () => { active = false; };
+  }, [range.start, range.end, headers]);
+
+  const totals = useMemo(() => (days ?? []).reduce((sum, day) => ({
+    calories: sum.calories + day.calories, fat: sum.fat + day.fat,
+    carbs: sum.carbs + day.carbs, fiber: sum.fiber + day.fiber,
+  }), { calories: 0, fat: 0, carbs: 0, fiber: 0 }), [days]);
+  const logged = (days ?? []).filter(day => day.items > 0).length;
+
+  return <div className="report-nutrition report-trend">
+    <h3>Seven-day nutrition trend</h3>
+    <p className="page-help">
+      The seven completed days from {mediumDate(range.start)} to {mediumDate(range.end)}. Today is still in
+      progress, so it is deliberately left out. Carbohydrates here are total carbohydrates, not net carbs.
+    </p>
+    {error && <p className="form-error">{error}</p>}
+    {days === null
+      ? <div className="empty-state">Loading the seven-day trend…</div>
+      : days.length === 0
+        ? <div className="empty-state">No completed days to show yet.</div>
+        : <>
+            <div className="report-table-wrap">
+              <table className="report-table">
+                <caption className="report-visually-hidden">
+                  Calories, total fat, total carbohydrates, and fiber for each of the seven completed days
+                </caption>
+                <thead><tr>
+                  <th scope="col">Day</th>
+                  <th scope="col">Calories</th>
+                  <th scope="col">Total fat (g)</th>
+                  <th scope="col">Total carbs (g)</th>
+                  <th scope="col">Fiber (g)</th>
+                </tr></thead>
+                <tbody>{days.map(day => <tr key={day.date} className={day.items === 0 ? "report-empty-day" : ""}>
+                  <th scope="row"><strong>{weekdayLabel(day.date)} {shortDate(day.date)}</strong></th>
+                  <td>{amount(day.calories)}</td>
+                  <td>{amount(day.fat)}</td>
+                  <td>{amount(day.carbs)}</td>
+                  <td>{amount(day.fiber)}</td>
+                </tr>)}</tbody>
+                <tfoot><tr>
+                  <th scope="row">Grand total</th>
+                  <td>{amount(Math.round(totals.calories * 100) / 100)} <i>cal</i></td>
+                  <td>{amount(Math.round(totals.fat * 100) / 100)} <i>g</i></td>
+                  <td>{amount(Math.round(totals.carbs * 100) / 100)} <i>g</i></td>
+                  <td>{amount(Math.round(totals.fiber * 100) / 100)} <i>g</i></td>
+                </tr></tfoot>
+              </table>
+            </div>
+            <p className="page-help">
+              {logged} of {days.length} days have food logged. Each column is totalled in its own unit — calories
+              and grams are never added together.
+            </p>
+          </>}
+  </div>;
 }
 
 /**
@@ -1102,17 +1336,130 @@ function EditSavedFood({ food, profile, onClose, onSaved }: { food: Food; profil
   return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">My Foods</p><h2>Edit saved food</h2></div><button onClick={onClose}>×</button></div><div className="coming-soon"><span>✓</span><div><strong>Past entries are protected</strong><p>This changes the reusable saved food only.</p></div></div><form className="food-form" onSubmit={submit}><label>Food name<input name="name" required defaultValue={food.name} /></label><label>Serving<input name="serving" required defaultValue={food.serving} /></label><NutritionFields item={food} />{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button></form></div></div>;
 }
 
-function EditDiaryEntry({ entry, profile, onClose, onSaved }: { entry: Entry; profile: Profile; onClose: () => void; onSaved: (entry: Entry) => void }) {
-  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+/**
+ * Reads the food currently typed into an edit form.
+ *
+ * Used by every action on the Edit Food screen, so Save, Copy to Today, and
+ * Add to My Foods all work from exactly the same values — including edits that
+ * have not been saved yet. A blank fat subtype stays null, never zero.
+ */
+function readFoodForm(form: HTMLFormElement): { meal: Meal; eatenOn: string; values: FoodValues } {
+  const data = new FormData(form);
+  const text = (key: string) => String(data.get(key) ?? "").trim();
+  const number = (key: string) => Number(data.get(key));
+  const optional = (key: string) => {
+    const raw = text(key);
+    return raw === "" ? null : Number(raw);
+  };
+  return {
+    meal: text("meal") as Meal,
+    eatenOn: text("eatenOn"),
+    values: {
+      name: text("name"), serving: text("serving"),
+      calories: number("calories"), protein: number("protein"), fat: number("fat"),
+      carbs: number("carbs"), fiber: number("fiber"),
+      saturatedFat: optional("saturatedFat"), transFat: optional("transFat"),
+      monounsaturatedFat: optional("monounsaturatedFat"), polyunsaturatedFat: optional("polyunsaturatedFat"),
+    },
+  };
+}
+
+/**
+ * One saved diary entry, with the three things that can be done to it.
+ *
+ * They are deliberately separate operations:
+ *  - Save changes updates this one entry, and moves it when the diary date is
+ *    changed. It is a move, never a copy: the same row is updated, so there is
+ *    only ever one of it.
+ *  - Copy to Today opens the ordinary Add Food form on today, prefilled with
+ *    whatever is on screen now. Nothing is written until that form is
+ *    submitted, and this entry is not touched either way.
+ *  - Add to My Foods saves a reusable food from these values. It does not
+ *    move, copy, or alter the diary entry, and Copy to Today does not add
+ *    anything to My Foods.
+ */
+function EditDiaryEntry({ entry, profile, onClose, onSaved, onCopyToToday, onFoodsChanged }: {
+  entry: Entry; profile: Profile; onClose: () => void; onSaved: (entry: Entry) => void;
+  onCopyToToday: (values: FoodValues, meal: Meal) => void; onFoodsChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [savingFood, setSavingFood] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const formRef = useRef<HTMLFormElement | null>(null);
+  // A second tap must not write a second time, whatever the button's disabled
+  // state has managed to render yet.
+  const inFlight = useRef(false);
+
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true); setError(""); setNotice("");
     const body = Object.fromEntries(new FormData(event.currentTarget).entries());
     const response = await fetch("/api/entries", { method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" }, body: JSON.stringify({ ...body, id: entry.id }) });
     const result = await response.json();
+    inFlight.current = false;
     if (!response.ok) { setError(result.error ?? "Unable to update diary entry"); setBusy(false); return; }
     onSaved(result.entry);
   }
-  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true"><div className="modal-head"><div><p className="eyebrow">Diary entry</p><h2>Edit food</h2></div><button onClick={onClose}>×</button></div><form className="food-form" onSubmit={submit}><label>Meal<select name="meal" defaultValue={entry.meal}>{meals.map(meal => <option key={meal}>{meal}</option>)}</select></label><label>Food name<input name="name" required defaultValue={entry.name} /></label><label>Serving eaten<input name="serving" required defaultValue={entry.serving} /></label><NutritionFields item={entry} />{error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Update diary entry"}</button></form></div></div>;
+
+  /** Hands the values on screen to the Add Food form. Nothing is saved here. */
+  function copyToToday() {
+    const form = formRef.current;
+    if (!form) return;
+    if (!form.reportValidity()) return;
+    const { meal, values } = readFoodForm(form);
+    // Routed through the shared copier, so the identity, the day it was eaten,
+    // and the audit columns are dropped in exactly one place.
+    onCopyToToday(copyOfEntry({ ...entry, ...values, meal }), meal);
+  }
+
+  /** Saves these values as a reusable food. The diary entry is left alone. */
+  async function addToMyFoods() {
+    const form = formRef.current;
+    if (!form || savingFood) return;
+    if (!form.reportValidity()) return;
+    setSavingFood(true); setError(""); setNotice("");
+    const { values } = readFoodForm(form);
+    try {
+      const response = await fetch("/api/custom-foods", {
+        method: "POST", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" },
+        body: JSON.stringify(savedFoodFrom(values)),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) { setError(result.error ?? "Unable to save that food to My Foods"); return; }
+      setNotice(result.created
+        ? `“${values.name}” was added to My Foods. This diary entry is unchanged.`
+        : `“${values.name}” was already in My Foods, so it was updated. This diary entry is unchanged.`);
+      onFoodsChanged();
+    } catch {
+      setError("Unable to reach My Foods. Nothing was saved and this diary entry is unchanged.");
+    } finally {
+      setSavingFood(false);
+    }
+  }
+
+  return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="edit-entry-title">
+    <div className="modal-head"><div><p className="eyebrow">Diary entry</p><h2 id="edit-entry-title">Edit food</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
+    <form className="food-form" ref={formRef} onSubmit={submit}>
+      <div className="form-grid">
+        <label>Diary date<input name="eatenOn" type="date" required defaultValue={entry.eatenOn} /><small>Changing this moves the entry to that day.</small></label>
+        <label>Meal<select name="meal" defaultValue={entry.meal}>{meals.map(meal => <option key={meal}>{meal}</option>)}</select></label>
+      </div>
+      <label>Food name<input name="name" required defaultValue={entry.name} /></label>
+      <label>Serving eaten<input name="serving" required defaultValue={entry.serving} /></label>
+      <NutritionFields item={entry} />
+      {error && <p className="form-error">{error}</p>}
+      {notice && <p className="saved-food-notice" aria-live="polite">{notice}</p>}
+      <button className="primary" disabled={busy}>{busy ? "Saving…" : "Save changes"}</button>
+      <div className="entry-actions">
+        <button type="button" className="secondary" onClick={copyToToday} disabled={busy}>Copy to Today</button>
+        <button type="button" className="secondary" onClick={() => void addToMyFoods()} disabled={busy || savingFood}>{savingFood ? "Saving…" : "Add to My Foods"}</button>
+      </div>
+      <small className="field-help">Copy to Today opens a new entry for today with these values, leaving this one exactly as it is. Add to My Foods saves a reusable food and changes nothing in your diary.</small>
+    </form>
+  </div></div>;
 }
 
 function ProfileChooser({ onSelect }: { onSelect: (profile: Profile) => void }) {
@@ -1135,6 +1482,104 @@ function Macro({ label, value, goal, color, onOpen, openLabel }: { label: string
     {body}
     <span className="macro-more" aria-hidden="true">Breakdown</span>
   </button>;
+}
+
+/**
+ * The day's carbohydrates, split into the two figures that matter.
+ *
+ * Total carbs and net carbs are both readable without opening anything, in two
+ * equal halves. Net carbs carry the progress bar because that is the half with
+ * a configured goal; total carbohydrate deliberately has none, exactly as in
+ * the reports and both PDFs.
+ *
+ * The whole card is one button, so it opens with a tap, with Enter, or with
+ * Space, and reads as a single control to a screen reader rather than as two
+ * unrelated numbers.
+ */
+function CarbCard({ totals, goals, standing, onOpen }: {
+  totals: CarbTotals; goals: NetCarbGoals; standing: ReturnType<typeof netCarbProgress>; onOpen: () => void;
+}) {
+  return <section className="carb-card">
+    <button type="button" className="carb-card-button" onClick={onOpen} aria-haspopup="dialog"
+      aria-label={`Carbohydrates. Total ${amount(totals.carbs)} grams, net ${amount(totals.netCarbs)} grams against a goal of ${netCarbGoalLabel(goals)}. ${standing.summary}. Show the carbohydrate breakdown.`}>
+      <div className="carb-half">
+        <span>TOTAL CARBS</span>
+        <strong>{amount(totals.carbs)}<i>g</i></strong>
+        <small>{amount(totals.fiber)}g fiber included</small>
+      </div>
+      <div className="carb-half net">
+        <span>NET CARBS</span>
+        <strong>{amount(totals.netCarbs)}<i>g</i></strong>
+        <div className="progress"><i className="purple" style={{ width: `${Math.min(100, goals.max > 0 ? totals.netCarbs / goals.max * 100 : 0)}%` }} /></div>
+        <small className={`carb-standing ${standing.state}`}>{standing.summary}</small>
+      </div>
+      <span className="macro-more" aria-hidden="true">Breakdown</span>
+    </button>
+  </section>;
+}
+
+/**
+ * Today's carbohydrates in full, opened from the card above.
+ *
+ * Net carbs are shown as the tracker actually works them out — total
+ * carbohydrate minus fiber — rather than as a number with no explanation. The
+ * tracker records no sugar alcohols, so the row for them says exactly that
+ * instead of printing a zero that would claim the foods contained none.
+ */
+function CarbBreakdownDialog({ totals, goals, standing, onClose }: {
+  totals: CarbTotals; goals: NetCarbGoals; standing: ReturnType<typeof netCarbProgress>; onClose: () => void;
+}) {
+  const panel = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    panel.current?.focus();
+    function keyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+    }
+    document.addEventListener("keydown", keyDown);
+    return () => { document.removeEventListener("keydown", keyDown); opener?.focus?.(); };
+  }, [onClose]);
+
+  const help = totals.records === 0
+    ? "Nothing is logged for today yet."
+    : goals.min > 0
+      ? `Your net-carb goal is a range of ${netCarbGoalLabel(goals)}. Under the minimum is reported as under the minimum, not as being on track.`
+      : "Your net-carb goal is a maximum. Set a minimum in Settings to track a range instead.";
+
+  return <div className="modal-backdrop" onMouseDown={onClose}>
+    <div className="modal compact" ref={panel} tabIndex={-1} onMouseDown={event => event.stopPropagation()}
+      role="dialog" aria-modal="true" aria-labelledby="carb-detail-title" aria-describedby="carb-detail-help">
+      <div className="modal-head">
+        <div><p className="eyebrow">Today</p><h2 id="carb-detail-title">Carbohydrate breakdown</h2></div>
+        <button onClick={onClose} aria-label="Close">×</button>
+      </div>
+      <dl className="product-meta">
+        <div><dt>Net carb goal</dt><dd>{netCarbGoalLabel(goals)}</dd></div>
+        <div><dt>{standing.state === "above" ? "Over the maximum by" : standing.state === "below" ? "Below the minimum by" : "Left before the maximum"}</dt>
+          <dd className={standing.state === "above" ? "flagged" : ""}>{amount(standing.grams)} g</dd></div>
+        <div><dt>Foods counted</dt><dd>{totals.records} {totals.records === 1 ? "item" : "items"}</dd></div>
+      </dl>
+      <ul className="fat-detail-list">
+        <li>
+          <span>Total carbohydrates</span><b>{amount(totals.carbs)} g</b>
+          <small>Every carbohydrate gram recorded today, fiber included</small>
+        </li>
+        <li>
+          <span>Fiber</span><b>{amount(totals.fiber)} g</b>
+          <small>Subtracted from total carbohydrates to give net carbs</small>
+        </li>
+        <li>
+          <span>Sugar alcohols</span><b className="unknown">{UNKNOWN_FAT_LABEL}</b>
+          <small>This tracker has no field for sugar alcohols, so none are subtracted</small>
+        </li>
+        <li>
+          <span>Net carbohydrates</span><b>{amount(totals.netCarbs)} g</b>
+          <small>Total carbohydrates minus fiber, worked out food by food</small>
+        </li>
+      </ul>
+      <p className="fat-detail-help" id="carb-detail-help">{help}</p>
+    </div>
+  </div>;
 }
 
 /**
@@ -1381,16 +1826,28 @@ const sourceSummaries: Record<Source, string> = {
   saved: "From your saved foods",
   barcode: "From the product barcode",
   ai: "AI estimate — check it before saving",
+  copy: "Copied from an earlier diary entry",
 };
 
-function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSaved }: { meal: Meal; mealLocked: boolean; date: string; profile: Profile; foodsVersion: number; onClose: () => void; onSaved: (entry: Entry) => void }) {
+/**
+ * Adds one food to `date`.
+ *
+ * `prefill` is the copy of an existing diary entry. It only fills the form in:
+ * nothing is written until this form is submitted, every field stays editable,
+ * and the entry it was copied from is never touched. A copy deliberately does
+ * not tick "Save this to My Foods" — copying and saving a reusable food are
+ * separate actions.
+ */
+function AddFood({ meal, mealLocked, date, profile, foodsVersion, prefill, copiedFrom, onClose, onSaved }: { meal: Meal; mealLocked: boolean; date: string; profile: Profile; foodsVersion: number; prefill?: FoodValues; copiedFrom?: string; onClose: () => void; onSaved: (entry: Entry) => void }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [mealChoice, setMealChoice] = useState<Meal>(meal);
-  const [method, setMethod] = useState<Method>("saved");
+  const [method, setMethod] = useState<Method>(prefill ? "manual" : "saved");
   const [myFoods, setMyFoods] = useState<Food[]>([]);
-  const [selected, setSelected] = useState<Draft | null>(null);
+  const [selected, setSelected] = useState<Draft | null>(prefill ?? null);
   const [savedId, setSavedId] = useState<number | null>(null);
-  const [source, setSource] = useState<Source>("manual");
+  const [source, setSource] = useState<Source>(prefill ? "copy" : "manual");
+  // A second tap must not write a second entry, whatever has rendered yet.
+  const inFlight = useRef(false);
   // Bumped on every pick so the uncontrolled form remounts with the new values.
   const [selectionKey, setSelectionKey] = useState(0);
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -1503,10 +1960,16 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true); setError("");
     const form = new FormData(event.currentTarget); const body = Object.fromEntries(form.entries());
     const response = await fetch("/api/entries", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ ...body, eatenOn: date, barcode: barcode || undefined, saveCustom: form.get("saveCustom") === "on" }) });
-    const result = await response.json(); if (!response.ok) { setError(result.error ?? "Unable to save food"); setBusy(false); return; } onSaved(result.entry);
+    const result = await response.json();
+    inFlight.current = false;
+    if (!response.ok) { setError(result.error ?? "Unable to save food"); setBusy(false); return; }
+    onSaved(result.entry);
   }
 
   const missingLabels = (scanned?.missing ?? []).map(field => nutritionLabels[field] ?? field);
@@ -1514,7 +1977,10 @@ function AddFood({ meal, mealLocked, date, profile, foodsVersion, onClose, onSav
   const activeMethod = methods.find(item => item.id === method) ?? methods[0];
 
   return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="add-title">
-    <div className="modal-head"><div><p className="eyebrow">{mealLocked ? mealChoice : "New entry"}</p><h2 id="add-title">Add food</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
+    <div className="modal-head"><div><p className="eyebrow">{mealLocked ? mealChoice : "New entry"}</p><h2 id="add-title">{prefill ? "Copy to today" : "Add food"}</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
+    {/* The day being written to is always named, because a copy lands on today
+        even when a different day is open behind this form. */}
+    <p className="add-target-date">Adding to <strong>{longDate(date)}</strong>{copiedFrom && copiedFrom !== date ? ` · copied from ${longDate(copiedFrom)}` : ""}</p>
 
     <section className="add-step">
       <p className="step-label"><span aria-hidden="true">1</span> Find your food</p>
@@ -1650,7 +2116,8 @@ function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; pr
   // form is saved.
   const [draft, setDraft] = useState({
     calories: String(goals.calories),
-    netCarbs: String(goals.netCarbs),
+    netCarbsMin: String(netCarbGoalsFrom(goals).min),
+    netCarbsMax: String(netCarbGoalsFrom(goals).max),
     protein: String(goals.protein),
     fat: String(goals.fat),
     saturatedFat: goals.saturatedFat === null ? "" : String(goals.saturatedFat),
@@ -1666,17 +2133,37 @@ function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; pr
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   };
   const context = goalContext({
-    calories: entered(draft.calories), netCarbs: entered(draft.netCarbs), protein: entered(draft.protein),
+    calories: entered(draft.calories), netCarbs: entered(draft.netCarbsMax),
+    netCarbsMin: entered(draft.netCarbsMin), netCarbsMax: entered(draft.netCarbsMax),
+    protein: entered(draft.protein),
     fat: entered(draft.fat), saturatedFat: entered(draft.saturatedFat), fiber: entered(draft.fiber),
   });
+  /**
+   * The range as it is being typed, so an impossible one is reported before
+   * the form is submitted rather than only after a failed save. The same
+   * reader the API uses is called here, so the two cannot disagree.
+   */
+  const rangeCheck = readNetCarbGoals({ netCarbsMin: draft.netCarbsMin, netCarbsMax: draft.netCarbsMax });
+  const rangeNote = rangeCheck.ok
+    ? rangeCheck.value.min > 0
+      ? `Target range ${netCarbGoalLabel(rangeCheck.value)}`
+      : "No minimum: this is a maximum only"
+    : rangeCheck.error;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); const form = new FormData(event.currentTarget);
+    // The net-carb range is checked before anything is sent, with the same
+    // reader the API uses, so an impossible range never reaches the database.
+    const range = readNetCarbGoals({ netCarbsMin: form.get("netCarbsMin"), netCarbsMax: form.get("netCarbsMax") });
+    if (!range.ok) { setError(range.error); return; }
     // Blank stays blank: an unset saturated-fat goal is null, never zero.
     const saturatedRaw = String(form.get("saturatedFat") ?? "").trim();
     const next: Goals = {
       calories: Number(form.get("calories")), protein: Number(form.get("protein")), fat: Number(form.get("fat")),
-      netCarbs: Number(form.get("netCarbs")), saturatedFat: saturatedRaw === "" ? null : Number(saturatedRaw),
+      // `netCarbs` stays the maximum, which is what the single goal has always
+      // meant, so nothing still reading that one field reads a wrong number.
+      netCarbs: range.value.max, netCarbsMin: range.value.min, netCarbsMax: range.value.max,
+      saturatedFat: saturatedRaw === "" ? null : Number(saturatedRaw),
       fiber: Number(form.get("fiber")), waterOunces: Number(form.get("waterOunces")),
       waterShortcutOne: Number(form.get("waterShortcutOne")), waterShortcutTwo: Number(form.get("waterShortcutTwo")), waterShortcutThree: Number(form.get("waterShortcutThree")),
     };
@@ -1701,18 +2188,25 @@ function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; pr
       <p className="field-heading">Daily goals</p>
       <div className="form-grid">
         <GoalField name="calories" label="Calories" note={context.calories} value={draft.calories} onChange={field("calories")} />
-        <GoalField name="netCarbs" label="Net carbs (g)" note={context.netCarbs} value={draft.netCarbs} step="0.01" onChange={field("netCarbs")} />
+        <GoalField name="netCarbsMin" label="Net carbs minimum (g)" note="lowest of the range" value={draft.netCarbsMin} min="0" step="0.01" onChange={field("netCarbsMin")} />
+        <GoalField name="netCarbsMax" label="Net carbs maximum (g)" note={context.netCarbs} value={draft.netCarbsMax} step="0.01" onChange={field("netCarbsMax")} />
         <GoalField name="protein" label="Protein (g)" note={context.protein} value={draft.protein} step="0.01" onChange={field("protein")} />
         <GoalField name="fat" label="Total fat (g)" note={context.fat} value={draft.fat} step="0.01" onChange={field("fat")} />
         <GoalField name="saturatedFat" label="Saturated fat (g)" note={context.saturatedFat || "optional"} value={draft.saturatedFat} min="0.01" step="0.01" onChange={field("saturatedFat")} />
         <GoalField name="fiber" label="Fiber (g)" note={context.fiber} value={draft.fiber} step="0.01" onChange={field("fiber")} />
         <GoalField name="waterOunces" label="Water (oz)" note={context.waterOunces} value={draft.waterOunces} step="0.01" onChange={field("waterOunces")} />
       </div>
+      <p className={`goal-range-note${rangeCheck.ok ? "" : " invalid"}`} aria-live="polite">{rangeNote}</p>
       <small className="field-help">
         Percentages update as you type. Protein, total fat, and saturated fat show their share of the calorie goal;
-        net carbs show a calorie-equivalent, because net carbs exclude fiber and there is no total-carbohydrate goal.
-        They are not meant to add up to 100%. Fiber is a gram goal, not a calorie share, and the saturated fat goal
-        is optional — leave it blank for no goal.
+        net carbs show a calorie-equivalent for the maximum, because net carbs exclude fiber and there is no
+        total-carbohydrate goal. They are not meant to add up to 100%. Fiber is a gram goal, not a calorie share,
+        and the saturated fat goal is optional — leave it blank for no goal.
+      </small>
+      <small className="field-help">
+        Net carbs are a range. Set the minimum to 0 for a maximum only, which is how a single net-carb goal has
+        always worked. The minimum cannot be higher than the maximum, and staying below the minimum is reported as
+        being below it rather than as being on track.
       </small>
       <p className="field-heading spaced">Water shortcut buttons</p>
       <div className="form-grid three"><label>Shortcut 1 (oz)<input name="waterShortcutOne" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutOne)} /></label><label>Shortcut 2 (oz)<input name="waterShortcutTwo" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutTwo)} /></label><label>Shortcut 3 (oz)<input name="waterShortcutThree" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutThree)} /></label></div>
@@ -1901,31 +2395,41 @@ function AddExercise({ date, profile, onClose, onSaved }: { date: string; profil
 }
 
 /**
- * Corrects one saved activity, comments included.
+ * Corrects one saved activity, comments and date included.
  *
  * Every field is sent together, so editing the minutes keeps the comments and
- * editing the comments keeps the minutes.
+ * editing the comments keeps the minutes. Changing the date moves the activity
+ * to that day: the same row is updated, so it is a move and never a second
+ * copy sitting on the old day.
  */
 function EditExercise({ entry, profile, onClose, onSaved }: { entry: ExerciseEntry; profile: Profile; onClose: () => void; onSaved: (entry: ExerciseEntry) => void }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const inFlight = useRef(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault();
+    if (inFlight.current) return;
     const form = new FormData(event.currentTarget);
     const comments = String(form.get("comments") ?? "");
     if (comments.trim().length > MAX_ACTIVITY_COMMENTS) {
-      setError(`Keep the comments to ${MAX_ACTIVITY_COMMENTS} characters or fewer`); setBusy(false); return;
+      setError(`Keep the comments to ${MAX_ACTIVITY_COMMENTS} characters or fewer`); return;
     }
+    const exercisedOn = String(form.get("exercisedOn") ?? "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(exercisedOn)) { setError("Choose a valid date for this activity"); return; }
+    inFlight.current = true;
+    setBusy(true); setError("");
     const response = await fetch("/api/exercise", {
       method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" },
-      body: JSON.stringify({ id: entry.id, activity: form.get("activity"), minutes: Number(form.get("minutes")), calories: Number(form.get("calories") || 0), comments }),
+      body: JSON.stringify({ id: entry.id, exercisedOn, activity: form.get("activity"), minutes: Number(form.get("minutes")), calories: Number(form.get("calories") || 0), comments }),
     });
     const result = await response.json();
+    inFlight.current = false;
     if (!response.ok) { setError(result.error ?? "Unable to update exercise"); setBusy(false); return; }
     onSaved(result.entry);
   }
   return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal compact" onMouseDown={event => event.stopPropagation()} role="dialog" aria-modal="true">
     <div className="modal-head"><div><p className="eyebrow">Movement</p><h2>Edit activity</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
     <form className="food-form activity-form" onSubmit={submit}>
+      <label>Date<input name="exercisedOn" type="date" required defaultValue={entry.exercisedOn} /><small>Changing this moves the activity to that day.</small></label>
       <ActivityFields draft={{ activity: entry.activity, minutes: String(entry.minutes), calories: String(entry.calories), comments: entry.comments }} />
       {error && <p className="form-error">{error}</p>}
       <button className="primary" disabled={busy}>{busy ? "Saving…" : "Save activity"}</button>

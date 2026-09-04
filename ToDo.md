@@ -10,7 +10,7 @@
 | Manually enter foods                        | Complete | You can enter all nutrition values yourself.                                                                                                                   |
 | Remember custom foods                       | Complete | Manually entered foods can be saved under “My Foods” and reused. The Add Food form filters them with a searchable type-ahead list.                             |
 | Daily calorie tracking                      | Complete | Main screen shows consumed calories, goal, remaining calories, and over-goal status. The Calendar scores each day against the goal saved for that day.         |
-| Net-carbohydrate tracking                   | Complete | Calculated as total carbohydrates minus fiber.                                                                                                                 |
+| Net-carbohydrate tracking                   | Complete | Calculated as total carbohydrates minus fiber, food by food. The diary's carbohydrate card shows total carbs and net carbs side by side, and tapping it opens the breakdown. The goal is a minimum and a maximum, so being under the minimum is reported as under the minimum rather than as success. |
 | Protein and fat tracking                    | Complete | Both appear in daily progress totals. Tapping the Fat card opens the day's saturated, trans, monounsaturated, and polyunsaturated breakdown; a subtype nothing recorded reads "Not available", never 0 g. |
 | Fiber tracking                              | Complete | Fiber is stored with food entries and shown on the main screen with a customizable daily goal.                                                                 |
 | Multiple people—Chris and Sarah             | Complete | Each profile has separate food, goals, water, and saved foods.                                                                                                 |
@@ -103,7 +103,7 @@ Daily diary memo: One editable memo per user per date. It should not affect nutr
 Recap screenshot view: A clean, phone-sized summary card showing calories, net carbs, protein, fat, fiber, water, exercise minutes/calories, activity, weight if recorded, and date.
 Weekly weight log: Record date and weight, with an optional note. Weigh under similar conditions—same day, morning, after using the bathroom, before eating.
 Weight trend: Done. The Weight page shows the change since the last weigh-in per row and a chart with 1, 3, 6 month and all-time ranges reporting the change across the period.
-Weekly summary: Seven-day averages for calories, protein, net carbs, fiber, water, and movement—not just totals.
+Weekly summary: Seven-day averages for calories, protein, net carbs, fiber, water, and movement—not just totals. The seven-day nutrition trend table on Reports covers calories, total fat, total carbohydrates, and fiber; protein, water, and movement averages are still to come.
 Monthly waist measurement: Optional, but helpful when weight temporarily stalls.
 Milestones: Starting weight, current weight, total lost, next goal, and ultimate goal.
 A1C history: Date and result whenever tested, since lowering it is one of your main goals.
@@ -131,6 +131,32 @@ being used.
   percentage are always labelled apart. A saturated-fat goal is now an
   optional setting; there is still no total-carbohydrate goal, and total
   carbohydrates remain reported alongside net carbohydrates.
+
+- Past-day warning: choosing Add Food or Add Exercise while an earlier day is
+  on screen asks first, before any form opens, naming the day being viewed and
+  today. Declining opens nothing, writes nothing, and returns the diary to
+  today. Today is never questioned and a future date is deliberately left
+  alone.
+
+- Moving, copying, and saving one entry: the Edit Food screen carries an
+  editable diary date that moves the entry - the same row is updated, so no
+  copy is left behind - plus Copy to Today, which opens the ordinary Add Food
+  form on today prefilled and editable without touching the original, and Add
+  to My Foods, which saves a reusable food without altering the diary. The
+  Edit Activity screen has the same editable date, with the same move-not-copy
+  rule. Every one of them is scoped to the profile that owns the record.
+
+- Net-carbohydrate goal range: the single net-carb goal became a minimum and a
+  maximum, both editable in Settings. A minimum of 0 means no floor, which is
+  how the single goal always behaved, and that is what every existing goal was
+  migrated to. The minimum may not exceed the maximum, checked as it is typed
+  and again on the server. The original `net_carbs` column is kept and written
+  with the maximum, so every export, PDF, and older read path stays correct.
+
+- Seven-day nutrition trend: the Reports page carries a plain HTML table of the
+  seven completed days ending yesterday, with calories, total fat, total
+  carbohydrates, and fiber per day and a grand total per column. Total
+  carbohydrates, never net carbs. Unlike units are never added together.
 
 - Fat breakdown: saturated, trans, monounsaturated, and polyunsaturated fat
   are stored in grams beside total fat on every diary entry and saved food.

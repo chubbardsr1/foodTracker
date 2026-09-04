@@ -52,6 +52,16 @@ Not yet applied to production - run these in order, oldest first:
   extra needs running for it. No cycle is created by the migration or the
   import.)
 
+- 0012_net_carb_goal_range.sql (net_carbs_min and net_carbs_max columns on
+  nutrition_goals for the minimum and maximum net-carbohydrate goal. Additive:
+  no column is dropped or renamed. The original net_carbs column stays and is
+  from now on written with the same value as net_carbs_max, because a single
+  net-carb goal has always meant a ceiling and every export, PDF, and older
+  read path understands that column. The migration's UPDATE maps each existing
+  goal onto the maximum and starts the minimum at 0, so nobody's stored goal is
+  discarded and both profiles behave exactly as they did until a real range is
+  saved. There is still no total-carbohydrate goal.)
+
 Verify a migration landed before deploying the code that needs it. These are
 read-only:
 
@@ -60,6 +70,12 @@ npx wrangler d1 execute food-tracker-db --remote --command "PRAGMA table_info(nu
 npx wrangler d1 execute food-tracker-db --remote --command "PRAGMA table_info(food_entries);"
 
 npx wrangler d1 execute food-tracker-db --remote --command "select name from sqlite_master where type='table' and (name like 'workout%' or name='exercise_library') order by name;"
+
+After 0012, this must show net_carbs_min and net_carbs_max alongside the
+original net_carbs, and every existing row's net_carbs_max must equal its
+net_carbs:
+
+npx wrangler d1 execute food-tracker-db --remote --command "select owner, net_carbs, net_carbs_min, net_carbs_max from nutrition_goals;"
 
 # Starting the first VASA cycle in production - one time, from the app
 
