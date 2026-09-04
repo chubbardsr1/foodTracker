@@ -1,8 +1,12 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type RecapActivity, type RecapDay,
+  dayRecapText, priorRange, recapDaysFromExport, recapSections, rollingDates,
+} from "./day-recap";
 import ExportPanel from "./export-panel";
-import { exportSections as allExportSections } from "./export-shared";
+import { exportSections as allExportSections, fetchExport } from "./export-shared";
 import {
   type AddKind, type FoodValues,
   copyOfEntry, isPastDate, pastDateWarning, savedFoodFrom,
@@ -12,7 +16,7 @@ import {
   type NetCarbGoals, type NutritionAverages, type NutritionRow,
   CALORIE_SHARE_NOTE, CURRENT_GOALS_NOTE, UNKNOWN_FAT_LABEL,
   aggregateCarbs, aggregateFat, emptyFatTotals,
-  fatCoverageNote, fatSubtypeKeys, fatSubtypeLabels, fatSubtypeShortLabels, goalContext,
+  fatCoverageNote, fatSubtypeKeys, fatSubtypeLabels, goalContext,
   gramsOrUnknown, hasFatDetail, netCarbGoalLabel, netCarbGoalsFrom, netCarbProgress,
   nutritionRows, readNetCarbGoals, unclassifiedFat,
 } from "./nutrition";
@@ -118,24 +122,6 @@ function shiftMonth(month: string, step: number) {
 }
 function monthLabel(month: string) { return new Date(`${month}-01T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" }); }
 
-/**
- * The fat subtypes as indented plain-text lines, for the copied day summary.
- *
- * Nothing is produced when no food that day recorded a breakdown, so the
- * compact summary is unchanged for anyone who is not tracking subtypes.
- */
-function fatBreakdownLines(totals: FatTotals) {
-  if (!hasFatDetail(totals)) return [];
-  const lines = fatSubtypeKeys.map(key => {
-    const value = totals.subtotals[key];
-    const partial = value !== null && totals.missing[key] > 0 ? ` (from ${totals.known[key]} of ${totals.records} foods)` : "";
-    return `  ${fatSubtypeShortLabels[key]}: ${value === null ? UNKNOWN_FAT_LABEL : `${amount(value)}g`}${partial}`;
-  });
-  const other = unclassifiedFat(totals);
-  if (other !== null) lines.push(`  Unclassified: ${amount(other)}g`);
-  return lines;
-}
-
 export default function FoodTracker() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [date, setDate] = useState(localDate());
@@ -165,6 +151,19 @@ export default function FoodTracker() {
   const [carbDetailOpen, setCarbDetailOpen] = useState(false);
   // Bumped on every copy so the same confirmation can be shown twice running.
   const [copyNote, setCopyNote] = useState<{ id: number; text: string } | null>(null);
+  /**
+   * What "Copy this day" needs beyond the day on screen: the six calendar days
+   * before it, and the journal saved for it.
+   *
+   * Held against the profile and the date it was fetched for, so a stale window
+   * can never be pasted under a different day, and one profile's history can
+   * never be pasted under the other's. It is loaded when the diary moves rather
+   * than inside the button, because iPhone Safari refuses a clipboard write
+   * that happens after an await, and because the recap must copy in one tap.
+   */
+  const [recap, setRecap] = useState<{
+    profile: Profile | null; date: string; priorDays: RecapDay[] | null; journal: string | null;
+  }>({ profile: null, date: "", priorDays: null, journal: null });
 
   useEffect(() => {
     const saved = window.localStorage.getItem("foodTrackerProfile");
@@ -204,6 +203,39 @@ export default function FoodTracker() {
     finally { setLoading(false); }
   }
   useEffect(() => { void loadDay(date); }, [date, profile]);
+  /**
+   * Loads the recap history for the day on screen.
+   *
+   * The window always ends on the selected date and reaches back six days, so
+   * a recap written the next morning summarises the day it belongs to. Only the
+   * earlier days are fetched: the selected day is folded in from what is on
+   * screen, which keeps the rolling figures in step with the totals above them
+   * even while the day is still in progress.
+   */
+  useEffect(() => {
+    if (!profile || view !== "diary") return;
+    let live = true;
+    const { start, end } = priorRange(date);
+    const earlier = rollingDates(date).slice(0, -1);
+    void (async () => {
+      const [history, journal] = await Promise.allSettled([
+        fetchExport(profile, start, end, [...recapSections]),
+        fetch(`/api/journal?date=${date}`, { headers })
+          .then(response => response.ok ? response.json() as Promise<{ entry: JournalEntry | null }> : Promise.reject(new Error("journal"))),
+      ]);
+      if (!live) return;
+      setRecap({
+        profile, date,
+        // Null rather than an empty week: a failed fetch must not average one
+        // day as though it were seven.
+        priorDays: history.status === "fulfilled"
+          ? recapDaysFromExport(history.value, earlier, { calories: goals.calories, waterOunces: goals.waterOunces })
+          : null,
+        journal: journal.status === "fulfilled" ? journal.value.entry?.body ?? "" : null,
+      });
+    })();
+    return () => { live = false; };
+  }, [date, profile, view]);
   useEffect(() => {
     if (!copyNote) return;
     const timer = setTimeout(() => setCopyNote(null), 2500);
@@ -230,34 +262,46 @@ export default function FoodTracker() {
   const exerciseCalories = exercise.reduce((sum, item) => sum + item.calories, 0);
 
 
-  /** Plain-text version of the numbers on this screen, for pasting elsewhere. */
+  /**
+   * The day on screen, the rolling seven days ending on it, and its journal,
+   * as plain text for pasting elsewhere.
+   *
+   * Everything is built from the selected date. The history is used only when
+   * it was fetched for that same date, so a recap written the next morning can
+   * never quietly summarise today instead.
+   */
   function dayReport() {
-    const over = totals.calories - goals.calories;
-    const lines = [
-      longDate(date),
-      "",
-      `Calories: ${Math.round(totals.calories)} of ${goals.calories} (${over > 0 ? `${Math.round(over)} over` : `${Math.round(-over)} remaining`})`,
-      `Total carbs: ${round(totals.carbs)}g`,
-      `Net carbs: ${round(totals.netCarbs)}g of ${netCarbGoalLabel(netCarbGoals)} — ${netCarbStanding.summary}`,
-      `Protein: ${round(totals.protein)}g of ${goals.protein}g`,
-      `Fat: ${round(totals.fat)}g of ${goals.fat}g`,
-      // Indented under Fat, and only when something actually recorded a
-      // breakdown, so the copied day stays as short as it always was.
-      ...fatBreakdownLines(fatDetail),
-      `Fiber: ${round(totals.fiber)}g of ${goals.fiber}g`,
-      "",
-      `Activity: ${round(exerciseMinutes)} minutes${exerciseCalories > 0 ? ` · ${Math.round(exerciseCalories)} calories burned` : ""}`,
-    ];
-    if (exercise.length === 0) lines.push("- Nothing logged");
-    else for (const item of exercise) {
-      lines.push(`- ${item.activity}: ${round(item.minutes)} min${item.calories > 0 ? `, ${Math.round(item.calories)} cal` : ""}`);
-      // Comments are indented under their activity so a long gym note stays
-      // readable when the whole day is pasted somewhere else.
-      if (item.comments.trim()) for (const line of item.comments.split("\n")) lines.push(`  ${line}`);
-    }
-    lines.push("", `Steps: ${steps ? whole(steps.steps) : "not recorded"}`);
-    lines.push("", `Hydration: ${amount(waterTotal)} of ${goals.waterOunces} oz`);
-    return lines.join("\n");
+    const day: RecapDay = {
+      date,
+      items: entries.length,
+      calories: totals.calories, protein: totals.protein, fat: totals.fat,
+      carbs: carbDetail.carbs, fiber: carbDetail.fiber, netCarbs: carbDetail.netCarbs,
+      fatDetail,
+      // Judged against the goal in force now, exactly as the ring above it is.
+      calorieGoal: goals.calories,
+      exerciseMinutes, exerciseCalories, sessions: exercise.length,
+      // Null, not zero, when no step count was entered for the day.
+      steps: steps ? steps.steps : null,
+      waterOunces: waterTotal, waterGoal: goals.waterOunces,
+    };
+    const activities: RecapActivity[] = exercise.map(item => ({
+      activity: item.activity, minutes: item.minutes, calories: item.calories, comments: item.comments,
+    }));
+    // History is used only when it was fetched for this profile and this date.
+    const ready = recap.profile === profile && recap.date === date;
+    return dayRecapText({
+      day, activities, netCarbGoals,
+      goals: {
+        calories: goals.calories, protein: goals.protein, fat: goals.fat,
+        fiber: goals.fiber, waterOunces: goals.waterOunces,
+      },
+      priorDays: ready ? recap.priorDays : null,
+      journal: ready ? recap.journal : null,
+      // Read from the clock at the moment of the tap, so a page left open
+      // across midnight stops calling yesterday "today may still be in
+      // progress".
+      today: localDate(),
+    });
   }
 
   async function copyDay() {
@@ -288,7 +332,11 @@ export default function FoodTracker() {
 
   function selectProfile(next: Profile) {
     window.localStorage.setItem("foodTrackerProfile", next);
-    setEntries([]); setWater([]); setExercise([]); setSteps(null); setGoals(defaultGoals); setProfile(next);
+    setEntries([]); setWater([]); setExercise([]); setSteps(null); setGoals(defaultGoals);
+    // The recap history belongs to the profile it was fetched for and is
+    // dropped here rather than left to be pasted under the other one.
+    setRecap({ profile: null, date: "", priorDays: null, journal: null });
+    setProfile(next);
   }
   function shiftDate(days: number) { setDate(addDays(date, days)); }
 

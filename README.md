@@ -52,6 +52,8 @@ total carbohydrates, fiber, and net carbohydrates.
 - Export centre on the Weight, Journal, and Reports pages producing a
   printable PDF or a structured JSON file for a chosen date range, plus a
   concise one-page summary PDF for a doctor from the Reports page
+- Copy this day, which copies the selected day's totals, a rolling seven-day
+  summary ending on that same day, and that day's journal as plain text
 - Automatic net-carb calculation
 - A warning before food or exercise is added to a day that has already passed,
   offering to continue on that day or to jump back to today
@@ -168,6 +170,54 @@ header:
   planned chat recap will write them later.
 - **Workouts** - the workout program dashboard, the gym screen, and workout
   history. See [Workout programs](#workout-programs) below.
+
+### Copy this day
+
+The Copy this day button on the Diary copies three things as plain text: the
+selected day in full, a rolling seven-day summary, and the journal saved for
+that day.
+
+Everything is built from the date showing in the tracker, never from today's
+calendar date, because a recap is often written the following morning. The
+rolling period is the selected date plus the six calendar dates before it, and
+never reaches past the selected date. The selected day counts even while it is
+still in progress, so copying during the day produces a partial week and says
+so.
+
+Goals come from two different places, and the summary says which. The calorie
+goal is saved per date, so the combined seven-day goal adds together the goal
+saved for each of the seven dates and the average goal is that combined figure
+divided by seven, whether or not every date holds food. Net carbohydrate,
+protein, fat, fiber, and hydration goals are not stored historically, so the
+tracker's current settings are always used for them, including when an older
+date is copied. Each nutrition average is shown against its current goal with
+the difference, except total carbohydrates, which have no goal, and total fat,
+which is shown as a comparison rather than as a target to reach.
+
+Missing days are never counted as zeroes. Calories and nutrition are averaged
+over the days that recorded food, activity and hydration over the days that
+recorded anything at all, and steps over the days a count was entered on. Every
+average names its divisor - "average across 6 recorded days" - so a six-day
+figure is never read as a week divided by seven, and a fat subtype nothing
+recorded reads "Not available" rather than 0 g.
+
+Calories, steps, and activity minutes are shown as whole numbers, and grams and
+ounces to at most one decimal place. Every comparison is worked out from the
+figure as displayed, so 51 g of net carbs against a 125 g minimum reads as 74 g
+to reach it rather than 73.97 g.
+
+When the selected date is today, the summary says so beneath its heading,
+because the last day of the window is still being written. Copying an earlier
+date carries no such note.
+
+The journal is copied exactly as it was saved, with its paragraphs and line
+breaks intact and nothing summarised or rewritten. A day with no journal reads
+"Journal: Nothing recorded".
+
+The earlier days and the journal are fetched when the diary moves to a date, so
+the button itself copies in one tap. Copying still works when that fetch fails:
+the day is copied in full and the summary says the earlier days could not be
+loaded, rather than averaging one day as though it were seven.
 
 ### Exporting
 

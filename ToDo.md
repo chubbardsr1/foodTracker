@@ -103,7 +103,7 @@ Daily diary memo: One editable memo per user per date. It should not affect nutr
 Recap screenshot view: A clean, phone-sized summary card showing calories, net carbs, protein, fat, fiber, water, exercise minutes/calories, activity, weight if recorded, and date.
 Weekly weight log: Record date and weight, with an optional note. Weigh under similar conditions—same day, morning, after using the bathroom, before eating.
 Weight trend: Done. The Weight page shows the change since the last weigh-in per row and a chart with 1, 3, 6 month and all-time ranges reporting the change across the period.
-Weekly summary: Seven-day averages for calories, protein, net carbs, fiber, water, and movement—not just totals. The seven-day nutrition trend table on Reports covers calories, total fat, total carbohydrates, and fiber; protein, water, and movement averages are still to come.
+Weekly summary: Seven-day averages for calories, protein, net carbs, fiber, water, and movement—not just totals. Done for the copied recap: Copy this day on the Diary adds a rolling seven-day summary ending on the selected date, with averages for calories against each date's own goal, total and net carbs, protein, total fat and each subtype, fiber, activity minutes and calories, steps, and water, each saying how many of the seven days it was worked out from. The seven-day nutrition trend table on Reports still covers only calories, total fat, total carbohydrates, and fiber.
 Monthly waist measurement: Optional, but helpful when weight temporarily stalls.
 Milestones: Starting weight, current weight, total lost, next goal, and ultimate goal.
 A1C history: Date and result whenever tested, since lowering it is one of your main goals.
