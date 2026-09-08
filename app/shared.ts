@@ -62,3 +62,17 @@ export function mediumDate(date: string) {
 }
 /** Thousands separators for step counts, which run to five digits. */
 export function whole(value: number) { return Math.round(value).toLocaleString("en-US"); }
+
+/**
+ * True when every space-separated word in `query` is a partial match of some
+ * word in `text` — "med lar hard" matches "Medium to Large Hard-Boiled Egg"
+ * because "med" is found within "medium", "lar" within "large", and "hard"
+ * within "hard-boiled". Order does not matter and every typed word must find
+ * a match somewhere. An empty or blank query matches everything.
+ */
+export function omniMatch(text: string, query: string) {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  const words = text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return tokens.every(token => words.some(word => word.includes(token)));
+}

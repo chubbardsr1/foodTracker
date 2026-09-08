@@ -22,7 +22,7 @@ import {
 } from "./nutrition";
 import {
   type Profile, addDays, amount, lastCompleteDays, localDate, longDate, mediumDate,
-  profileNames, round, shortDate, weekdayLabel, whole,
+  omniMatch, profileNames, round, shortDate, weekdayLabel, whole,
 } from "./shared";
 import WeightChart from "./weight-chart";
 import WorkoutsPage from "./workouts";
@@ -39,6 +39,8 @@ type StepEntry = { id: number; steppedOn: string; steps: number };
 type JournalEntry = { id: number; entryOn: string; body: string; source: string; updatedAt: string };
 /** A saved food. Its nutrition, fat subtypes included, is for one full serving. */
 type Food = { id: number; name: string; serving: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; barcode?: string | null } & FatBreakdown;
+/** One distinct food actually entered into the diary, as My Foods' All Foods search returns it. */
+type HistoryFood = FoodValues & { lastEatenOn: string; timesLogged: number };
 /** Prefill for the Add Food form. Missing nutrition stays undefined so the field renders empty. */
 type Draft = { id?: number; name: string; serving: string; calories?: number; protein?: number; fat?: number; carbs?: number; fiber?: number; barcode?: string | null } & Partial<FatBreakdown>;
 type Source = "manual" | "saved" | "barcode" | "ai" | "copy";
@@ -423,7 +425,9 @@ export default function FoodTracker() {
     </nav>
     {message && <button className="notice" onClick={() => setMessage("")}>{message} ×</button>}
 
-    {view === "foods" && <MyFoodsPage profile={profile} onFoodsChanged={() => setSavedFoodsVersion(current => current + 1)} />}
+    {view === "foods" && <MyFoodsPage profile={profile}
+      onFoodsChanged={() => setSavedFoodsVersion(current => current + 1)}
+      onCopyToToday={(values, meal, copiedFrom) => setAddTarget({ meal, locked: false, date: localDate(), prefill: values, copiedFrom })} />}
     {view === "calendar" && <CalendarPage profile={profile} onOpenDay={date => { setDate(date); setView("diary"); }} />}
     {view === "reports" && <ReportsPage profile={profile} />}
     {view === "weight" && <WeightPage profile={profile} />}
@@ -602,21 +606,31 @@ function StepsCard({ date, profile, entry, onSaved, onRemoved, onError }: {
   </section>;
 }
 
-function MyFoodsPage({ profile, onFoodsChanged }: { profile: Profile; onFoodsChanged: () => void }) {
+function MyFoodsPage({ profile, onFoodsChanged, onCopyToToday }: {
+  profile: Profile; onFoodsChanged: () => void;
+  onCopyToToday: (values: FoodValues, meal: Meal, copiedFrom?: string) => void;
+}) {
   const [foods, setFoods] = useState<Food[]>([]);
   const [editing, setEditing] = useState<Food | null>(null);
   const [deleting, setDeleting] = useState<Food | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // "saved" is the reusable-food list this page has always shown. "history" is
+  // everything ever entered into the diary, for finding something to reuse
+  // that was never saved.
+  const [subview, setSubview] = useState<"saved" | "history">("saved");
   const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
-  useEffect(() => {
+  const loadSavedFoods = useCallback(() => {
+    setLoading(true);
     fetch("/api/custom-foods", { headers }).then(async response => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Unable to load saved foods");
       setFoods(data.foods ?? []);
+      setError("");
     }).catch(reason => setError(reason instanceof Error ? reason.message : "Unable to load saved foods")).finally(() => setLoading(false));
   }, [headers]);
+  useEffect(() => { loadSavedFoods(); }, [loadSavedFoods]);
 
   /**
    * Drops one saved food. The row only leaves the screen once the server has
@@ -632,21 +646,150 @@ function MyFoodsPage({ profile, onFoodsChanged }: { profile: Profile; onFoodsCha
     setNotice(`"${food.name}" was deleted. Diary entries made from it are unchanged.`);
     onFoodsChanged();
   }
+  /** A food saved from the All Foods search reloads the Saved Foods list too, so switching tabs shows it right away. */
+  function savedFromHistory(name: string) {
+    setNotice(`“${name}” was added to My Foods.`);
+    loadSavedFoods();
+    onFoodsChanged();
+  }
   return <section className="saved-food-page">
-    <div className="section-heading"><div><p className="eyebrow">Reusable entries</p><h2>Saved foods</h2></div><span>{foods.length} {foods.length === 1 ? "food" : "foods"}</span></div>
-    <p className="page-help">Changes here apply the next time you use a saved food. Previous diary entries remain unchanged.</p>
-    {error && <p className="form-error">{error}</p>}
+    <div className="section-heading"><div><p className="eyebrow">Reusable entries</p><h2>My Foods</h2></div>{subview === "saved" && <span>{foods.length} {foods.length === 1 ? "food" : "foods"}</span>}</div>
+    <div className="subtab-toggle" role="tablist" aria-label="My Foods view">
+      <button type="button" role="tab" aria-selected={subview === "saved"} className={subview === "saved" ? "active" : ""} onClick={() => { setNotice(""); setSubview("saved"); }}>Saved Foods</button>
+      <button type="button" role="tab" aria-selected={subview === "history"} className={subview === "history" ? "active" : ""} onClick={() => { setNotice(""); setSubview("history"); }}>All Foods</button>
+    </div>
     {notice && <p className="saved-food-notice" aria-live="polite">{notice}</p>}
-    {loading ? <div className="empty-state">Loading saved foods…</div> : foods.length === 0 ? <div className="empty-state">No saved foods yet.</div> : <div className="saved-food-list">{foods.map(food => <article className="saved-food-card" key={food.id}>
-      <div><strong>{food.name}</strong><span>{food.serving}</span><small>{round(food.calories)} cal · {round(food.protein)}g protein · {round(food.carbs - food.fiber)}g net carbs</small></div>
-      <div className="saved-food-actions">
-        <button type="button" onClick={() => { setNotice(""); setEditing(food); }}>Edit</button>
-        <button type="button" className="danger" onClick={() => { setNotice(""); setDeleting(food); }} aria-label={`Delete ${food.name}`}>Delete</button>
-      </div>
-    </article>)}</div>}
-    {editing && <EditSavedFood food={editing} profile={profile} onClose={() => setEditing(null)} onSaved={(food) => { setFoods(current => current.map(item => item.id === food.id ? food : item)); setEditing(null); }} />}
-    {deleting && <ConfirmDeleteFood food={deleting} onClose={() => setDeleting(null)} onConfirm={remove} />}
+    {subview === "saved" ? <>
+      <p className="page-help">Changes here apply the next time you use a saved food. Previous diary entries remain unchanged.</p>
+      {error && <p className="form-error">{error}</p>}
+      {loading ? <div className="empty-state">Loading saved foods…</div> : foods.length === 0 ? <div className="empty-state">No saved foods yet.</div> : <div className="saved-food-list">{foods.map(food => <article className="saved-food-card" key={food.id}>
+        <div><strong>{food.name}</strong><span>{food.serving}</span><small>{round(food.calories)} cal · {round(food.protein)}g protein · {round(food.carbs - food.fiber)}g net carbs</small></div>
+        <div className="saved-food-actions">
+          <button type="button" onClick={() => { setNotice(""); setEditing(food); }}>Edit</button>
+          <button type="button" className="danger" onClick={() => { setNotice(""); setDeleting(food); }} aria-label={`Delete ${food.name}`}>Delete</button>
+        </div>
+      </article>)}</div>}
+      {editing && <EditSavedFood food={editing} profile={profile} onClose={() => setEditing(null)} onSaved={(food) => { setFoods(current => current.map(item => item.id === food.id ? food : item)); setEditing(null); }} />}
+      {deleting && <ConfirmDeleteFood food={deleting} onClose={() => setDeleting(null)} onConfirm={remove} />}
+    </> : <FoodHistoryList profile={profile} onSaved={savedFromHistory} onCopyToToday={onCopyToToday} />}
   </section>;
+}
+
+/**
+ * Everything ever entered into the diary within a rolling window, one row per
+ * distinct name + serving so a food eaten daily is not repeated once for each
+ * day it was logged. Fetched once per window; typing in the search box only
+ * filters what is already on screen, never triggers another request.
+ *
+ * Nothing here can be edited or deleted — only reused, either saved as a
+ * reusable food or copied into a new entry for today. Either action leaves
+ * the diary entries this list was built from exactly as they were.
+ */
+function FoodHistoryList({ profile, onSaved, onCopyToToday }: {
+  profile: Profile; onSaved: (name: string) => void;
+  onCopyToToday: (values: FoodValues, meal: Meal, copiedFrom?: string) => void;
+}) {
+  const [days, setDays] = useState(14);
+  const [daysInput, setDaysInput] = useState("14");
+  const [foods, setFoods] = useState<HistoryFood[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [savedKeys, setSavedKeys] = useState<Set<string>>(new Set());
+  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError("");
+    const end = localDate(); const start = addDays(end, -(days - 1));
+    fetch(`/api/food-history?start=${start}&end=${end}`, { headers }).then(async response => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Unable to load your food history");
+      if (!active) return;
+      setFoods(data.foods ?? []);
+      setSavedKeys(new Set());
+    }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : "Unable to load your food history"); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [headers, days]);
+
+  // The one round trip above loads the window; every keystroke after that
+  // only filters the list already in memory.
+  const results = useMemo(() => foods.filter(food => omniMatch(food.name, search)), [foods, search]);
+  const keyFor = (food: HistoryFood) => `${food.name.toLowerCase()} ${food.serving.toLowerCase()}`;
+
+  /** Reads the days box on blur or Enter, so a half-typed number never fires a request. */
+  function applyDays() {
+    const parsed = Math.round(Number(daysInput));
+    if (!Number.isFinite(parsed) || parsed < 1) { setDaysInput(String(days)); return; }
+    const clamped = Math.min(180, parsed);
+    setDaysInput(String(clamped));
+    setDays(clamped);
+  }
+
+  /** Saves one history row as a reusable food. The diary entries it came from are untouched. */
+  async function saveToMyFoods(food: HistoryFood) {
+    const key = keyFor(food);
+    setSavingKey(key); setError("");
+    try {
+      const response = await fetch("/api/custom-foods", {
+        method: "POST", headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(savedFoodFrom(food)),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) { setError(result.error ?? "Unable to save that food to My Foods"); return; }
+      setSavedKeys(current => new Set(current).add(key));
+      onSaved(food.name);
+    } catch {
+      setError("Unable to reach My Foods. Nothing was saved.");
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
+  /** Hands the row to the ordinary Add Food form, on today. Nothing is written until that form is submitted. */
+  function copyToToday(food: HistoryFood) {
+    const { lastEatenOn, timesLogged: _timesLogged, ...values } = food;
+    onCopyToToday(values, defaultMealForNow(), lastEatenOn);
+  }
+
+  return <div className="food-history">
+    <p className="page-help">Everything you have ever entered, going back {days} {days === 1 ? "day" : "days"}. Nothing here can be edited or deleted — save it to My Foods or copy it into today.</p>
+    <div className="history-controls">
+      <label className="history-days">Look back
+        <span><input type="number" min={1} max={180} inputMode="numeric" value={daysInput}
+          onChange={event => setDaysInput(event.target.value)}
+          onBlur={applyDays}
+          onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); applyDays(); } }}
+          aria-label="Days to look back" /> days</span>
+      </label>
+      <input type="search" className="history-search" placeholder='Search, e.g. "med lar hard"'
+        value={search} onChange={event => setSearch(event.target.value)} aria-label="Search everything you've ever entered" />
+    </div>
+    {error && <p className="form-error">{error}</p>}
+    {loading ? <div className="empty-state">Loading your food history…</div>
+      : foods.length === 0 ? <div className="empty-state">Nothing logged in the last {days} {days === 1 ? "day" : "days"}.</div>
+      : results.length === 0 ? <div className="empty-state">No food matches “{search.trim()}”.</div>
+      : <div className="saved-food-list">{results.map(food => {
+          const key = keyFor(food);
+          const saved = savedKeys.has(key);
+          return <article className="saved-food-card" key={key}>
+            <div>
+              <strong>{food.name}</strong>
+              <span>{food.serving}</span>
+              <small>{round(food.calories)} cal · {round(food.protein)}g protein · {round(food.carbs - food.fiber)}g net carbs</small>
+              <small>Last logged {shortDate(food.lastEatenOn)}{food.timesLogged > 1 ? ` · ${food.timesLogged} times` : ""}</small>
+            </div>
+            <div className="saved-food-actions">
+              <button type="button" onClick={() => copyToToday(food)}>Copy to Today</button>
+              <button type="button" disabled={savingKey === key} onClick={() => void saveToMyFoods(food)}>
+                {saved ? "Saved ✓" : savingKey === key ? "Saving…" : "Save to My Foods"}
+              </button>
+            </div>
+          </article>;
+        })}</div>}
+  </div>;
 }
 
 /**

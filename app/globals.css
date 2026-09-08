@@ -79,6 +79,19 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .food-form { display:flex; flex-direction:column; gap:14px; }
 .field-heading{display:block;margin:0 0 7px;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.field-heading.spaced{margin-top:18px}.field-help{display:block;margin-top:-4px;color:var(--muted);font-size:11px;line-height:1.45}
 .saved-food-page{padding-top:8px}.page-help{margin:-2px 0 18px;color:var(--muted);font-size:12px;line-height:1.5}.saved-food-list{display:flex;flex-direction:column;gap:10px}.saved-food-card{display:flex;align-items:center;gap:14px;padding:16px;border:1px solid #e2dfd5;border-radius:17px;background:var(--card);box-shadow:0 6px 18px rgba(50,60,53,.045)}.saved-food-card>div{display:flex;min-width:0;flex:1;flex-direction:column;gap:4px}.saved-food-card strong{font-size:14px}.saved-food-card span,.saved-food-card small{color:var(--muted);font-size:11px}.saved-food-card button{padding:8px 12px;border:1px solid #d5ded7;border-radius:10px;background:#f4f8f5;color:var(--sage-dark);font-size:11px;font-weight:800;cursor:pointer}
+/* My Foods: Saved Foods / All Foods toggle, and the All Foods search controls */
+.subtab-toggle{display:flex;gap:4px;margin:0 0 14px;padding:4px;border:1px solid #e4e0d6;border-radius:12px;background:#f6f4ee}
+.subtab-toggle button{flex:1;padding:9px 10px;border:0;border-radius:9px;background:transparent;color:var(--muted);font-size:12px;font-weight:800;cursor:pointer}
+.subtab-toggle button:hover{color:var(--sage-dark)}
+.subtab-toggle button.active{background:var(--ink);color:white}
+.history-controls{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+.history-days{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 13px;border:1px solid #dcd9d0;border-radius:12px;background:white;color:#4a574f;font-size:12px;font-weight:700}
+.history-days span{display:flex;align-items:center;gap:6px;color:var(--muted);font-weight:600}
+.history-days input{width:52px;padding:8px;border:1px solid #dcd9d0;border-radius:9px;background:white;text-align:center;font-size:16px;outline:none}
+.history-days input:focus{border-color:var(--sage);box-shadow:0 0 0 3px rgba(115,150,133,.13)}
+/* 16px keeps iOS Safari from zooming the page when the search field is focused. */
+.history-search{width:100%;padding:12px 13px;border:1px solid #dcd9d0;border-radius:11px;background:white;font-size:16px;outline:none}
+.history-search:focus{border-color:var(--sage);box-shadow:0 0 0 3px rgba(115,150,133,.13)}
 .food-form label { display:flex; flex-direction:column; gap:6px; color:#4a574f; font-size:11px; font-weight:700; }
 .food-form input,.food-form select { width:100%; padding:12px 13px; border:1px solid #dcd9d0; border-radius:11px; background:white; outline:none; }
 .food-form input:focus,.food-form select:focus { border-color:var(--sage); box-shadow:0 0 0 3px rgba(115,150,133,.13); }
