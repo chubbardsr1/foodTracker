@@ -50,8 +50,7 @@ export function safeNumber(value: unknown, cap: number, floor = 0) {
   return Math.round(parsed * 100) / 100
 }
 
-export const geminiKey = () =>
-  (env as unknown as { GEMINI_API_KEY?: string }).GEMINI_API_KEY ?? ""
+export const geminiKey = () => env.GEMINI_API_KEY ?? ""
 
 /** Everything that can go wrong, so each feature can word its own message. */
 export type GeminiFailure =
@@ -110,7 +109,7 @@ function post(model: string, key: string, options: AskOptions, signal: AbortSign
  * upstream error body is ever passed back to the caller.
  */
 export async function askGemini(key: string, options: AskOptions): Promise<GeminiResult> {
-  const configured = (env as unknown as { GEMINI_MODEL?: string }).GEMINI_MODEL
+  const configured = env.GEMINI_MODEL
   const primary = clean(configured, 60) || DEFAULT_MODEL
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)

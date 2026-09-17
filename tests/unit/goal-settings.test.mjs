@@ -124,6 +124,52 @@ test("the reports feed returns the current goals and the nutrition averages", as
   assert.equal(fiber.goalContext, "100.0% of goal");
 });
 
+test("the migration adds nullable age, height, and gender columns", () => {
+  assert.ok(migrationFiles().includes("0013_body_metrics.sql"));
+  const columns = database.prepare("pragma table_info(nutrition_goals)").all();
+  const byName = new Map(columns.map(column => [column.name, column]));
+  for (const name of ["age", "height_inches", "gender"]) {
+    assert.ok(byName.has(name), `expected column ${name}`);
+    assert.equal(byName.get(name).notnull, 0);
+    assert.equal(byName.get(name).dflt_value, null);
+  }
+});
+
+test("age, height, and gender save without one another and read back", async () => {
+  await save({ ...base, age: 41, heightInches: 70, gender: "male" });
+  const saved = await readGoals();
+  assert.equal(saved.age, 41);
+  assert.equal(saved.heightInches, 70);
+  assert.equal(saved.gender, "male");
+});
+
+test("blank age, height, or gender clears back to unset without touching the others", async () => {
+  await save({ ...base, age: 41, heightInches: 70, gender: "male" });
+  await save({ ...base, age: "", heightInches: 70, gender: "male" });
+  let saved = await readGoals();
+  assert.equal(saved.age, null);
+  assert.equal(saved.heightInches, 70);
+  assert.equal(saved.gender, "male");
+
+  await save({ ...base, age: "", heightInches: "", gender: "" });
+  saved = await readGoals();
+  assert.equal(saved.age, null);
+  assert.equal(saved.heightInches, null);
+  assert.equal(saved.gender, null);
+});
+
+test("an invalid age, height, or gender is refused and leaves the stored values untouched", async () => {
+  await save({ ...base, age: 41, heightInches: 70, gender: "male" });
+  for (const bad of [{ age: 0 }, { age: 200 }, { heightInches: 0 }, { heightInches: 500 }, { gender: "unicorn" }]) {
+    const response = await save({ ...base, age: 41, heightInches: 70, gender: "male", ...bad });
+    assert.equal(response.status, 400, `${JSON.stringify(bad)} should be refused`);
+  }
+  const saved = await readGoals();
+  assert.equal(saved.age, 41);
+  assert.equal(saved.heightInches, 70);
+  assert.equal(saved.gender, "male");
+});
+
 test("one profile's goals never reach the other", async () => {
   await save({ ...base, saturatedFat: 16 });
   const hers = await entriesApi.GET(new Request("http://x/api/entries?date=2026-08-20", {

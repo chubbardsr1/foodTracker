@@ -1,216 +1,61 @@
-# Claude Code Instructions
+# Food Tracker - Claude Code
 
-## Project purpose
+Private food and workout tracker for Chris and Sarah. Keep the existing React
+19, TypeScript, Vinext, Cloudflare Workers/D1, and Drizzle architecture. Prioritize
+the iPhone browser and free services. Use Sonnet for planning and implementation;
+do not require another model or a team of agents for ordinary work.
 
-This is Chris and Sarah's private browser-based food tracker. It is a React
-19/Vinext application running on Cloudflare Workers with a Cloudflare D1
-database. It does not use Python and must remain usable from an iPhone browser.
+## Start every task
 
-## Local workspace and shell
+- Work from `D:\webserver\foodTracker` using Windows PowerShell.
+- Check `git branch --show-current` and `git status --short` before edits.
+  Edit only on `working`; ask before switching or creating branches.
+- Local code and uncommitted work are the implementation source of truth.
+  Preserve unrelated changes. Inspect relevant code before relying on old notes.
+- Read only the documents relevant to the task from the table below.
 
-- Windows project directory: `D:\webserver\foodTracker`
-- Provide and run commands in Windows PowerShell.
-- Node.js must be 22.13 or newer.
-- Before changing anything, run:
+## Work in small, complete increments
 
-  ```powershell
-  git branch --show-current
-  git status --short
-  ```
+1. Identify the requested outcome and affected behavior.
+2. For a contained fix, explain the approach briefly and implement it.
+3. For schema, security, integration, multi-feature, or substantial refactoring
+   work, use `docs/plans/TEMPLATE.md`. Plan in Sonnet. An explicit implementation
+   request authorizes routine implementation choices; ask only about unresolved
+   material product decisions. Reuse an accepted plan rather than planning twice.
+4. Implement one coherent slice, verify it, and review the diff.
+5. Update only documentation made inaccurate by the change. Report changes,
+   checks actually run, remaining gaps, and whether a migration was added.
 
-- Work only on the `working` branch. If the current branch is `master`, stop
-  and ask Chris before making changes.
-- The local working tree may contain newer changes than GitHub. Treat the local
-  files and `git status` as the source of truth. Never discard or overwrite
-  unrelated changes.
+If the plan becomes materially wrong, explain the evidence and revise it before
+continuing. After three materially different failed approaches, stop and report
+the blocker instead of looping. Do not expand a small task into a general rewrite.
 
-## Claude Code workflow
+## Boundaries
 
-Claude Code may edit files directly in the local working tree and run safe local
-builds and tests. The patch-only instructions in `AGENTS.md` apply to changes
-delivered through ChatGPT, not to Claude Code working locally.
+Claude Code may edit locally and run safe local checks. ChatGPT patch delivery is
+defined in `AGENTS.md`. Do not commit, push, merge, deploy, or run remote database
+commands without Chris's explicit instruction. Never discard user changes.
+Do not read secrets, `.dev.vars`, private exports, or `production-snapshot.sql`
+as routine context. Never put credentials or personal records in logs or fixtures.
+Discuss paid services and material dependency changes before adding them.
 
-Do not commit, push, merge into `master`, deploy production, or run a remote D1
-migration unless Chris explicitly asks. Never use destructive Git commands such
-as `git reset --hard` or `git checkout --` on user changes.
+## Read only when relevant
 
-After code changes, show:
+| Task | Reference |
+| --- | --- |
+| Locate implementation or understand current features | `docs/architecture.md` |
+| UI, API, or integration changes | `docs/standards/engineering.md` |
+| Nutrition, diary, goals, reports, or workouts | `docs/standards/data-behavior.md` |
+| Schema, migrations, local D1, or release preparation | `docs/standards/database-release.md` |
+| Verification and finishing work | `docs/standards/verification.md` |
+| Substantial feature plan | `docs/plans/TEMPLATE.md` |
+| Feature requests | `ToDo.md` (verify status against code) |
+| Production migration history and deployment | `Push to Production.md` |
 
-1. Files changed.
-2. Whether a database migration was added.
-3. Commands Chris should run and the directory where they run.
-4. Which commands are one-time and which belong in `Push to Production.md`.
+## Keep the instructions small
 
-## Local development
-
-Install dependencies when needed:
-
-```powershell
-npm install
-```
-
-Start the local site:
-
-```powershell
-npx vite
-```
-
-Use the local URL printed by Vite. The Cloudflare Vite plugin runs the Worker
-locally and persists the development D1 database under:
-
-```text
-.local-data
-```
-
-Validate a Windows build with:
-
-```powershell
-npm run build:windows
-```
-
-Wrangler and `@cloudflare/vite-plugin` must support the compatibility date in
-`vite.config.ts`. If the local runtime reports that the compatibility date is
-too new, update both development dependencies rather than lowering the
-application compatibility date:
-
-```powershell
-npm install --save-dev wrangler@latest @cloudflare/vite-plugin@latest
-```
-
-## Local D1 database
-
-Local binding:
-
-- Binding: `DB`
-- Database name: `food-tracker-db`
-- Database ID: `e998b960-0351-4cfa-8043-41780649bf13`
-- Wrangler config: `wrangler.local.jsonc`
-- Vite persistence directory: `.local-data`
-
-The local Wrangler configuration must use the same binding, database name, and
-database ID as `vite.config.ts`.
-
-Run a new migration locally with:
-
-```powershell
-npx wrangler d1 execute DB --local --config=.\wrangler.local.jsonc --persist-to=.\.local-data --file=.\drizzle\<migration-file>.sql
-```
-
-Migrations `0000` through `0011` are already established. Do not normally
-rerun them. New schema changes must use the next numbered SQL file in
-`drizzle`, starting with `0012_...`.
-
-## Production
-
-Production application:
-
-```text
-https://food-tracker.hubbard-foodtracker.workers.dev
-```
-
-Production infrastructure:
-
-- Cloudflare Worker: `food-tracker`
-- D1 database: `food-tracker-db`
-- D1 binding: `DB`
-- D1 database ID: `e998b960-0351-4cfa-8043-41780649bf13`
-- Cloudflare Access restricts the site to Chris and Sarah using emailed login
-  codes.
-
-Every migration in `drizzle` through `0009_fat_breakdown.sql` has already
-been applied to production. Never apply those production migrations again.
-`Push to Production.md` holds the authoritative list.
-
-For a newly created migration, the production command is:
-
-```powershell
-npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\<migration-file>.sql
-```
-
-Production code deployment is:
-
-```powershell
-npm run deploy
-```
-
-Both production commands must be run from `D:\webserver\foodTracker`, and
-only after Chris explicitly approves the production action. A new migration
-must be applied remotely before deploying code that requires its new schema.
-
-## Data behavior that must be preserved
-
-- Chris and Sarah use separate profiles and all records remain separated by
-  owner.
-- Food diary entries store a nutrition snapshot. Editing a saved custom food
-  must not alter historical diary entries.
-- Editing a diary item changes only that specific diary entry.
-- Saved custom foods retain nutrition for one full serving.
-- Fractional servings, such as `0.50`, scale the diary nutrition values.
-- Nutrition values support two decimal places.
-- Net carbohydrates are calculated as total carbohydrates minus fiber.
-- Total fat is the primary fat value and is never derived from its subtypes.
-- A workout session snapshots what the program prescribed when it started.
-  Editing a program, template, exercise description, or video must never change
-  a workout already recorded.
-- A program cycle only ever exists because a user started it with a start date
-  they chose. Never create one from a migration, a seed, or the current date,
-  and never mark a cycle or a week completed merely because a date has passed.
-- Finishing a workout writes exactly one `exercise_entries` row and stores its
-  id on the session, so re-finishing updates that row. Never let a workout add
-  a second activity entry or otherwise double-count a day.
-- Percentage of calories and percentage of a configured goal are different
-  things and are always labelled as such. Calorie shares use 4/4/9 and are
-  never adjusted to total 100%. Total carbohydrates, not net carbs, are the
-  carbohydrate share of calories; net carbs are a "calorie-equivalent". Fiber
-  is reported against its gram goal, never as a share of calories.
-- Saturated, trans, monounsaturated, and polyunsaturated fat are nullable.
-  Null means the value was never recorded; 0 means a source reported none.
-  Never turn a missing subtype into a zero, never force the four to add up to
-  total fat, and never show an unknown value as `0 g`.
-- Never expose one profile's data to the other profile.
-- Every update and delete must include the current profile/owner in its database
-  condition.
-
-## Current feature set
-
-- Breakfast, lunch, dinner, and snack diary entries
-- Manual and reusable custom foods
-- My Foods management and editing
-- Editing individual diary entries
-- Ounce servings and fractional serving scaling
-- Calories, protein, total fat, saturated/trans/monounsaturated/polyunsaturated
-  fat, total carbs, fiber, and net carbs
-- Per-profile daily goals, including an optional saturated-fat goal
-- Water tracking
-- Exercise tracking
-- Workout programs: a reusable exercise and program library seeded with VASA's
-  four-week plan, per-profile four-week cycles with explicit start dates,
-  set-by-set workout tracking, workout history, and one linked activity-diary
-  entry per finished workout
-- Cloudflare Access protection
-
-Always inspect the actual local code before assuming a recently added feature is
-present, because Chris may not have committed or pushed the latest local work.
-
-## Planned work
-
-See `ToDo.md`. The major planned feature is Google Gemini-assisted meal entry.
-It should accept typed or dictated ingredients and quantities, return food name,
-serving, calories, protein, fat, total carbs, and fiber, then require review
-before adding the diary entry or saving a custom food.
-
-Never place Gemini or other API keys directly in source control. Use
-ignored local environment files for development and Cloudflare secrets for
-production.
-
-## Implementation rules
-
-- Keep the existing React/Vinext/Cloudflare architecture.
-- Use Drizzle ORM and D1-compatible SQLite.
-- Preserve the mobile-first interface.
-- Validate API input and return useful error messages.
-- Scope reads, updates, and deletes by profile ownership.
-- Do not add a paid service without discussing it with Chris.
-- Update `README.md`, `ToDo.md`, or production instructions when a change
-  makes them inaccurate.
-
+Do not append completed-feature narratives, migration counters, or session logs
+here. Put durable rules in the relevant standard, operational details in their
+runbook, and unfinished feature work in `ToDo.md`. Apply Chris's corrections to
+the task; propose general rules in `docs/standards/pending.md` before treating
+them as permanent policy. No extra documentation is needed for a routine fix.

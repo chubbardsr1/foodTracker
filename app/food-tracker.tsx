@@ -12,13 +12,13 @@ import {
   copyOfEntry, isPastDate, pastDateWarning, savedFoodFrom,
 } from "./diary-actions";
 import {
-  type CarbTotals, type FatBreakdown, type FatTotals,
+  type CarbTotals, type FatBreakdown, type FatTotals, type Gender,
   type NetCarbGoals, type NutritionAverages, type NutritionRow,
-  CALORIE_SHARE_NOTE, CURRENT_GOALS_NOTE, UNKNOWN_FAT_LABEL,
-  aggregateCarbs, aggregateFat, emptyFatTotals,
+  ACTIVITY_LEVELS, CALORIE_SHARE_NOTE, CURRENT_GOALS_NOTE, DEFAULT_ACTIVITY_LEVEL, UNKNOWN_FAT_LABEL,
+  aggregateCarbs, aggregateFat, bmrFrom, emptyFatTotals,
   fatCoverageNote, fatSubtypeKeys, fatSubtypeLabels, goalContext,
   gramsOrUnknown, hasFatDetail, netCarbGoalLabel, netCarbGoalsFrom, netCarbProgress,
-  nutritionRows, readNetCarbGoals, unclassifiedFat,
+  nutritionRows, readNetCarbGoals, tdeeFrom, unclassifiedFat,
 } from "./nutrition";
 import {
   type Profile, addDays, amount, lastCompleteDays, localDate, longDate, mediumDate,
@@ -70,7 +70,7 @@ type ScannedProduct = {
  * what the single goal has always meant, so anything still reading that one
  * field reads the ceiling rather than nothing.
  */
-type Goals = { calories: number; protein: number; fat: number; netCarbs: number; netCarbsMin: number; netCarbsMax: number; saturatedFat: number | null; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number };
+type Goals = { calories: number; protein: number; fat: number; netCarbs: number; netCarbsMin: number; netCarbsMax: number; saturatedFat: number | null; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number; age: number | null; heightInches: number | null; gender: Gender | null };
 type View = "diary" | "foods" | "reports" | "calendar" | "weight" | "journal" | "workouts";
 type CalendarDay = {
   date: string; calories: number; items: number; goalCalories: number; goalSource: "saved" | "current";
@@ -87,7 +87,7 @@ type ReportGoals = { calories: number; protein: number; fat: number; netCarbs: n
 type ReportAverages = { caloriesPerDay: number; caloriesPerLoggedDay: number; exerciseMinutesPerDay: number; stepsPerRecordedDay: number };
 
 const meals: Meal[] = ["Breakfast", "Lunch", "Dinner", "Snacks"];
-const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, netCarbsMin: 0, netCarbsMax: 25, saturatedFat: null, fiber: 25, waterOunces: 64, waterShortcutOne: 6, waterShortcutTwo: 8, waterShortcutThree: 12 };
+const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 25, netCarbsMin: 0, netCarbsMax: 25, saturatedFat: null, fiber: 25, waterOunces: 64, waterShortcutOne: 6, waterShortcutTwo: 8, waterShortcutThree: 12, age: null, heightInches: null, gender: null };
 const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "diary", label: "Diary", title: "Nourish", eyebrow: "Daily Food Tracker" },
   { id: "foods", label: "My Foods", title: "My Foods", eyebrow: "Reusable entries" },
@@ -430,7 +430,7 @@ export default function FoodTracker() {
       onCopyToToday={(values, meal, copiedFrom) => setAddTarget({ meal, locked: false, date: localDate(), prefill: values, copiedFrom })} />}
     {view === "calendar" && <CalendarPage profile={profile} onOpenDay={date => { setDate(date); setView("diary"); }} />}
     {view === "reports" && <ReportsPage profile={profile} />}
-    {view === "weight" && <WeightPage profile={profile} />}
+    {view === "weight" && <WeightPage profile={profile} goals={goals} />}
     {view === "journal" && <JournalPage profile={profile} />}
     {/* A finished workout writes one activity entry, so the day is reloaded to
         pick it up rather than left showing the diary as it was. */}
@@ -1247,7 +1247,7 @@ function NutritionAveragesTable({ nutrition, fat, goals }: {
  * Weight log: one reading per day, newest first, with the change from the
  * previous reading so a run of entries reads as a trend.
  */
-function WeightPage({ profile }: { profile: Profile }) {
+function WeightPage({ profile, goals }: { profile: Profile; goals: Goals }) {
   const [entries, setEntries] = useState<WeightEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1299,6 +1299,8 @@ function WeightPage({ profile }: { profile: Profile }) {
 
     {!loading && <WeightChart entries={sorted} />}
 
+    {!loading && <BmrPanel goals={goals} latest={sorted[0] ?? null} />}
+
     <ExportPanel profile={profile} eyebrow="Export centre" title="Export weight history"
       help="Take this weight log as a printable PDF or as JSON. Only your own readings are included."
       sections={["weights"]} earliest={oldest} />
@@ -1338,6 +1340,61 @@ function WeightPage({ profile }: { profile: Profile }) {
 
     {editing && <EditWeight entry={editing} profile={profile} onClose={() => setEditing(null)}
       onSaved={entry => { setEntries(current => current.map(item => item.id === entry.id ? entry : item)); setEditing(null); }} />}
+  </section>;
+}
+
+/**
+ * BMR and TDEE, collapsed by default, using the same toggle pattern as the
+ * export centre so the Weight tab does not grow two different kinds of
+ * expandable section.
+ *
+ * BMR itself never changes with activity; only which of the five levels is
+ * highlighted for TDEE. That selection is display only and is never saved,
+ * so it always reopens on "Moderately active".
+ */
+function BmrPanel({ goals, latest }: { goals: Goals; latest: WeightEntry | null }) {
+  const [open, setOpen] = useState(false);
+  const [activityLevel, setActivityLevel] = useState(DEFAULT_ACTIVITY_LEVEL);
+  const bmr = bmrFrom({ gender: goals.gender, age: goals.age, heightInches: goals.heightInches, pounds: latest?.pounds ?? null });
+  const selected = ACTIVITY_LEVELS.find(level => level.id === activityLevel) ?? ACTIVITY_LEVELS[2];
+
+  return <section className="export-panel">
+    <button type="button" className="export-toggle" aria-expanded={open} onClick={() => setOpen(current => !current)}>
+      <span className="export-toggle-copy"><p className="eyebrow">Estimated</p><strong>BMR &amp; TDEE</strong></span>
+      <span aria-hidden="true">{open ? "−" : "+"}</span>
+    </button>
+
+    {open && <div className="export-body">
+      {bmr === null
+        ? <p className="page-help">
+            Set your age, height, and gender in Settings (⚙), and log at least one weight above, to see your
+            estimated BMR and TDEE here.
+          </p>
+        : <>
+            <p className="page-help">
+              Estimated from your latest weight of {amount(latest!.pounds)} lbs, logged {mediumDate(latest!.weighedOn)}, using
+              the Mifflin-St Jeor formula. This is an estimate, not medical advice.
+            </p>
+            <div className="weight-chart-stats">
+              <div><span>BMR</span><strong>{whole(bmr)}</strong><small>calories/day at rest</small></div>
+              <div><span>TDEE</span><strong>{whole(tdeeFrom(bmr, activityLevel)!)}</strong><small>{selected.label.toLowerCase()}</small></div>
+            </div>
+            <label>Activity level
+              <select value={activityLevel} onChange={event => setActivityLevel(event.target.value)}>
+                {ACTIVITY_LEVELS.map(level => <option key={level.id} value={level.id}>{level.label} (×{level.factor})</option>)}
+              </select>
+            </label>
+            <small className="field-help">{selected.description}</small>
+            <table className="bmr-activity-table">
+              <thead><tr><th>Activity level</th><th>Factor</th><th>TDEE</th></tr></thead>
+              <tbody>
+                {ACTIVITY_LEVELS.map(level => <tr key={level.id} className={level.id === activityLevel ? "active" : undefined}>
+                  <td>{level.label}</td><td>×{level.factor}</td><td>{whole(tdeeFrom(bmr, level.id)!)}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </>}
+    </div>}
   </section>;
 }
 
@@ -2349,6 +2406,10 @@ function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; pr
     if (!range.ok) { setError(range.error); return; }
     // Blank stays blank: an unset saturated-fat goal is null, never zero.
     const saturatedRaw = String(form.get("saturatedFat") ?? "").trim();
+    // Same for age, height, and gender: each is optional and independent.
+    const ageRaw = String(form.get("age") ?? "").trim();
+    const heightRaw = String(form.get("heightInches") ?? "").trim();
+    const genderRaw = String(form.get("gender") ?? "").trim();
     const next: Goals = {
       calories: Number(form.get("calories")), protein: Number(form.get("protein")), fat: Number(form.get("fat")),
       // `netCarbs` stays the maximum, which is what the single goal has always
@@ -2357,6 +2418,9 @@ function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; pr
       saturatedFat: saturatedRaw === "" ? null : Number(saturatedRaw),
       fiber: Number(form.get("fiber")), waterOunces: Number(form.get("waterOunces")),
       waterShortcutOne: Number(form.get("waterShortcutOne")), waterShortcutTwo: Number(form.get("waterShortcutTwo")), waterShortcutThree: Number(form.get("waterShortcutThree")),
+      age: ageRaw === "" ? null : Number(ageRaw),
+      heightInches: heightRaw === "" ? null : Number(heightRaw),
+      gender: genderRaw === "male" || genderRaw === "female" ? genderRaw : null,
     };
     if ([next.waterShortcutOne, next.waterShortcutTwo, next.waterShortcutThree].some(value => !validShortcut(value))) {
       setError(`Water shortcuts must be positive numbers up to ${MAX_WATER_OUNCES} with no more than two decimal places.`);
@@ -2402,6 +2466,20 @@ function SettingsEditor({ goals, profile, onClose, onSaved }: { goals: Goals; pr
       <p className="field-heading spaced">Water shortcut buttons</p>
       <div className="form-grid three"><label>Shortcut 1 (oz)<input name="waterShortcutOne" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutOne)} /></label><label>Shortcut 2 (oz)<input name="waterShortcutTwo" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutTwo)} /></label><label>Shortcut 3 (oz)<input name="waterShortcutThree" type="number" min="0.01" max={MAX_WATER_OUNCES} step="0.01" required defaultValue={amount(goals.waterShortcutThree)} /></label></div>
       <small className="field-help">These replace the +6, +8, and +12 buttons on the hydration card. The +Other button always stays available.</small>
+      <p className="field-heading spaced">Age, height, and gender</p>
+      <div className="form-grid three">
+        <label>Age (years)<input name="age" type="number" min="1" max="120" step="1" defaultValue={goals.age ?? ""} placeholder="e.g. 45" /></label>
+        <label>Height (inches)<input name="heightInches" type="number" min="0.1" max="108" step="0.1" defaultValue={goals.heightInches ?? ""} placeholder="e.g. 70" /></label>
+        <label>Gender<select name="gender" defaultValue={goals.gender ?? ""}>
+          <option value="">Not set</option>
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+        </select></label>
+      </div>
+      <small className="field-help">
+        All three are optional. Set them to see your estimated BMR and TDEE on the Weight tab; leave any blank to
+        hide that panel until it is complete.
+      </small>
       {error && <p className="form-error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "Saving…" : "Save settings"}</button>
     </form>
   </div></div>;

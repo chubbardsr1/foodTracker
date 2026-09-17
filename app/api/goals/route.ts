@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { nutritionGoals } from "../../../db/schema";
-import { readNetCarbGoals, readOptionalGrams } from "../../nutrition";
+import { readBodyMetrics, readNetCarbGoals, readOptionalGrams } from "../../nutrition";
 import { refreshTodayGoal } from "../daily-goal";
 import { profileFrom } from "../profile";
 
@@ -31,11 +31,16 @@ export async function PUT(request: Request) {
     if (!saturated.ok || (saturated.value !== null && saturated.value <= 0)) {
       return Response.json({ error: "The saturated fat goal must be more than zero, or left blank for no goal" }, { status: 400 });
     }
+    // Age, height, and gender for the BMR/TDEE panel. Each is optional and
+    // independent, exactly like the saturated-fat goal above.
+    const metrics = readBodyMetrics(payload);
+    if (!metrics.ok) return Response.json({ error: metrics.error }, { status: 400 });
     // `netCarbs` is written with the maximum so every export, PDF, and older
     // read path keeps seeing the ceiling it has always understood.
     const saved = {
       ...goals, saturatedFat: saturated.value,
       netCarbsMin: netCarbs.value.min, netCarbsMax: netCarbs.value.max,
+      age: metrics.value.age, heightInches: metrics.value.heightInches, gender: metrics.value.gender,
       ...Object.fromEntries(Object.entries(shortcuts).map(([key, value]) => [key, Math.round(value * 100) / 100])) as typeof shortcuts,
     };
     const db = getDb(); const owner = profileFrom(request);

@@ -33,14 +33,10 @@ Migrations already applied to production - never rerun these:
   polyunsaturated_fat columns on food_entries and custom_foods; additive and
   nullable with no default, so every existing diary entry and saved food keeps
   all of its values and carries an unknown breakdown until it is edited)
-
-Not yet applied to production - run these in order, oldest first:
-
 - 0010_saturated_fat_goal.sql (optional saturated_fat column on
   nutrition_goals; additive and nullable with no default, so neither profile's
   existing goals change and "no saturated-fat goal" stays distinct from a goal
   of zero. There is still no total-carbohydrate goal.)
-
 - 0011_workout_programs.sql (nine new tables for workout programs and strength
   training: exercise_library, workout_programs, workout_program_weeks,
   workout_templates, workout_template_exercises, workout_program_cycles,
@@ -51,16 +47,29 @@ Not yet applied to production - run these in order, oldest first:
   time the Workouts page is opened, and that import is idempotent, so nothing
   extra needs running for it. No cycle is created by the migration or the
   import.)
-
 - 0012_net_carb_goal_range.sql (net_carbs_min and net_carbs_max columns on
-  nutrition_goals for the minimum and maximum net-carbohydrate goal. Additive:
-  no column is dropped or renamed. The original net_carbs column stays and is
-  from now on written with the same value as net_carbs_max, because a single
-  net-carb goal has always meant a ceiling and every export, PDF, and older
-  read path understands that column. The migration's UPDATE maps each existing
-  goal onto the maximum and starts the minimum at 0, so nobody's stored goal is
-  discarded and both profiles behave exactly as they did until a real range is
-  saved. There is still no total-carbohydrate goal.)
+  nutrition_goals; the original net_carbs column stays as the ceiling every
+  export, PDF, and older read path already understands.)
+
+(2026-09-17: 0010, 0011, and 0012 were found already live on production
+during this session's `PRAGMA table_info(nutrition_goals)` and
+`sqlite_master` checks, even though this ledger still listed them as
+pending. Moved here on that direct evidence, per this file's own rule of
+confirming status rather than inferring it from a filename. If you recall
+running them yourself outside Claude Code, that would explain the gap; if
+not, it is worth a closer look at how they landed.)
+
+- 0013_body_metrics.sql (age, height_inches, and gender columns on
+  nutrition_goals, for the BMR/TDEE panel on the Weight tab. Additive and
+  nullable with no default, so neither profile's existing goals change and
+  "not set" stays distinct from an age or height of zero. Height is stored in
+  inches; the BMR calculation converts it to centimeters, and weight to
+  kilograms, in application code only. Applied to production 2026-09-17;
+  confirmed via `PRAGMA table_info(nutrition_goals)`.)
+
+Not yet applied to production:
+
+- none known, as of 2026-09-17.
 
 Verify a migration landed before deploying the code that needs it. These are
 read-only:

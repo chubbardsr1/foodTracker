@@ -1,22 +1,16 @@
 # Agent Instructions
 
-- Treat GitHub as read-only. Never commit, push, merge, create branches, or modify the repository directly.
-- Deliver all code changes as downloadable patch files.
-- Provide commands for Windows PowerShell.
-- Keep responses short unless more detail is requested.
-- Always state the directory where each command must be run.
-- Always explain when each command should be run.
-- Clearly identify one-time setup commands.
-- Clearly identify commands that belong in the “Code Push to Production” document.
-- Database migrations must be provided as numbered SQL files in the `drizzle` directory.
-- Clearly state whether a migration should run locally, against the remote Cloudflare D1 database, or both.
-- Never instruct the user to rerun an already-applied production migration.
-- Production code is deployed with:
+Read `CLAUDE.md` for the shared project workflow and task-specific references.
 
-  ```powershell
-  npm run deploy
-
-
-  Production D1 migrations use:
-  npx wrangler d1 execute food-tracker-db --remote --file=.\drizzle\<migration-file>.sql
-  ```
+- Claude Code working locally may edit the working tree and run safe local checks.
+- Changes delivered through ChatGPT must remain downloadable patches. Do not
+  directly modify this repository through ChatGPT.
+- GitHub is read-only unless Chris explicitly requests a Git action. Do not
+  commit, push, merge, or create branches as an implied step of implementation.
+- Preserve all unrelated local changes.
+- Use Windows PowerShell. Keep explanations short. For user-run commands, state
+  the working directory and when to run them; distinguish one-time setup from
+  routine verification and production steps.
+- Schema changes use numbered SQL files in `drizzle`. Specify local versus remote
+  application, never rerun an applied migration, and follow
+  `docs/standards/database-release.md` and `Push to Production.md`.

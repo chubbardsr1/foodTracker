@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import type { D1Database } from "@cloudflare/workers-types";
 
 interface Env {
   ASSETS: Fetcher;
@@ -12,6 +13,16 @@ interface Env {
       };
     };
   };
+}
+
+// Minimal, DOM-typed shapes for the platform bindings this file touches.
+// The real Cloudflare types for these (from `@cloudflare/workers-types`)
+// declare their own `Request`/`Response`, which conflicts with the `dom`
+// lib's `Response.json()` typing relied on throughout the client-side React
+// components in this codebase. `D1Database` above has no such overlap, so it
+// is imported directly.
+interface Fetcher {
+  fetch(request: Request): Promise<Response>;
 }
 
 interface ExecutionContext {

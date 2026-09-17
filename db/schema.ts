@@ -44,6 +44,15 @@ export const nutritionGoals = sqliteTable("nutrition_goals", {
   waterShortcutOne: real("water_shortcut_one").notNull().default(6),
   waterShortcutTwo: real("water_shortcut_two").notNull().default(8),
   waterShortcutThree: real("water_shortcut_three").notNull().default(12),
+  // Body metrics for the BMR/TDEE panel on the Weight tab. All three are
+  // nullable with no default: they are new, nobody has set them yet, and
+  // "not set" must stay distinct from a real age or height of zero. Height is
+  // in inches, matching every other imperial unit this tracker uses; the BMR
+  // formula's own kilograms and centimeters are converted from it in
+  // `app/nutrition.ts`, not stored here.
+  age: integer("age"),
+  heightInches: real("height_inches"),
+  gender: text("gender"),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, table => [uniqueIndex("nutrition_goals_owner_idx").on(table.owner)]);
 

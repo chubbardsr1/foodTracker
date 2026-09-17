@@ -829,3 +829,103 @@ export const CALORIE_SHARE_NOTE =
 export const CURRENT_GOALS_NOTE =
   "Goal percentages are based on the currently configured calorie and nutrition goals, not on what the goals may "
   + "have been on each date in this range.";
+
+/* -------------------------------------------------------------------------
+ * BMR and TDEE
+ *
+ * Mifflin-St Jeor, the one formula this tracker uses. It needs weight in
+ * kilograms and height in centimeters even though the rest of the app is
+ * imperial (pounds, ounces, inches), so the conversion happens once here and
+ * the stored/entered values never change unit anywhere else.
+ * ---------------------------------------------------------------------- */
+
+export type Gender = "male" | "female";
+
+const KG_PER_POUND = 0.45359237;
+const CM_PER_INCH = 2.54;
+
+export type ActivityLevel = { id: string; label: string; factor: number; description: string };
+
+/** All five standard activity levels, in order from least to most active. */
+export const ACTIVITY_LEVELS: ActivityLevel[] = [
+  { id: "sedentary", label: "Sedentary", factor: 1.2,
+    description: "Little to no intentional exercise; desk job with minimal daily walking." },
+  { id: "light", label: "Lightly active", factor: 1.375,
+    description: "Light exercise or sports 1–3 days a week, or a job that keeps you on your feet." },
+  { id: "moderate", label: "Moderately active", factor: 1.55,
+    description: "Moderate exercise 3–5 days a week, or a physically active daily lifestyle." },
+  { id: "very", label: "Very active", factor: 1.725,
+    description: "Hard exercise or sports 6–7 days a week, or a highly physical job." },
+  { id: "extra", label: "Extra active", factor: 1.9,
+    description: "Highly intense training twice a day, or an elite athletic schedule combined with physical labor." },
+];
+export const DEFAULT_ACTIVITY_LEVEL = "moderate";
+
+/** The multiplier for a level id, falling back to Moderately active for an unknown id. */
+export function activityFactor(id: string): number {
+  return (ACTIVITY_LEVELS.find(level => level.id === id)
+    ?? ACTIVITY_LEVELS.find(level => level.id === DEFAULT_ACTIVITY_LEVEL))!.factor;
+}
+
+export type BmrInput = {
+  gender: Gender | null | undefined;
+  age: number | null | undefined;
+  heightInches: number | null | undefined;
+  pounds: number | null | undefined;
+};
+
+/**
+ * Mifflin-St Jeor BMR, in calories per day:
+ *   10 x kg + 6.25 x cm - 5 x age, +5 for a man or -161 for a woman.
+ *
+ * Returns null when gender, age, height, or weight is missing or not a
+ * usable positive number, rather than guessing a default for any of them.
+ */
+export function bmrFrom(input: BmrInput): number | null {
+  const { gender, age, heightInches, pounds } = input;
+  if (gender !== "male" && gender !== "female") return null;
+  if (typeof age !== "number" || !Number.isFinite(age) || age <= 0) return null;
+  if (typeof heightInches !== "number" || !Number.isFinite(heightInches) || heightInches <= 0) return null;
+  if (typeof pounds !== "number" || !Number.isFinite(pounds) || pounds <= 0) return null;
+  const kg = pounds * KG_PER_POUND;
+  const cm = heightInches * CM_PER_INCH;
+  const base = 10 * kg + 6.25 * cm - 5 * age;
+  return Math.round(base + (gender === "male" ? 5 : -161));
+}
+
+/** BMR multiplied by an activity level's factor, or null when the BMR itself is unknown. */
+export function tdeeFrom(bmr: number | null, activityLevelId: string): number | null {
+  return bmr === null ? null : Math.round(bmr * activityFactor(activityLevelId));
+}
+
+export type BodyMetrics = { age: number | null; heightInches: number | null; gender: Gender | null };
+export type BodyMetricsRead = { ok: true; value: BodyMetrics } | { ok: false; error: string };
+
+/**
+ * Reads the optional age/height/gender fields off a settings payload.
+ *
+ * Each is independent and each stays null when blank, exactly like the
+ * saturated-fat goal: "not set" is never confused with zero, and a value can
+ * be filled in later without touching the other two.
+ */
+export function readBodyMetrics(source: Record<string, unknown>): BodyMetricsRead {
+  const rawAge = source.age;
+  const age = rawAge === undefined || rawAge === null || String(rawAge).trim() === "" ? null : Number(rawAge);
+  if (age !== null && (!Number.isFinite(age) || !Number.isInteger(age) || age <= 0 || age > 120)) {
+    return { ok: false, error: "Age must be a whole number of years from 1 to 120, or left blank." };
+  }
+
+  const rawHeight = source.heightInches;
+  const height = rawHeight === undefined || rawHeight === null || String(rawHeight).trim() === "" ? null : Number(rawHeight);
+  if (height !== null && (!Number.isFinite(height) || height <= 0 || height > 108)) {
+    return { ok: false, error: "Height must be in inches, more than zero and no more than 108, or left blank." };
+  }
+
+  const rawGender = typeof source.gender === "string" ? source.gender.trim().toLowerCase() : "";
+  if (rawGender !== "" && rawGender !== "male" && rawGender !== "female") {
+    return { ok: false, error: "Gender must be male or female, or left blank." };
+  }
+  const gender: Gender | null = rawGender === "male" || rawGender === "female" ? rawGender : null;
+
+  return { ok: true, value: { age, heightInches: height === null ? null : roundTwo(height), gender } };
+}
