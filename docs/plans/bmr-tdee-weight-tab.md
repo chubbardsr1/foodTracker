@@ -104,5 +104,15 @@ and `gender`, all nullable, every existing column unchanged). Not applied to
 production — that step, plus deploy, is still Chris's call per
 `docs/standards/database-release.md`.
 
+Migration `0013_body_metrics.sql` is applied to production (confirmed via
+`PRAGMA table_info(nutrition_goals)`), the code is committed to `working`
+(b025d8a) and pushed to GitHub, and `npm run deploy` has shipped it to
+production (food-tracker, version d53fa24f-c59a-4379-ae1b-90b5334b3b0a).
+
+While confirming production status, found migrations 0010, 0011, and 0012
+already live on production even though `Push to Production.md` still listed
+them as pending — ledger corrected to match observed reality; see the note
+there.
+
 Not yet done: a manual phone-width pass (Settings save, Weight tab expand,
 switch profile) hasn't been run in a browser this session.
