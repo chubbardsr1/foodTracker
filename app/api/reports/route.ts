@@ -1,10 +1,12 @@
-import { and, asc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { exerciseEntries, foodEntries, nutritionGoals, stepEntries } from "../../../db/schema";
+import { dailyGoals, exerciseEntries, foodEntries, nutritionGoals, stepEntries, weightEntries } from "../../../db/schema";
 import {
-  type FatSubtype, type FatTotals,
-  emptyFatTotals, fatSubtypeKeys, fatTotalsFrom, mergeFatTotals, netCarbGoalsFrom, netCarbsFrom,
+  type FatSubtype, type FatTotals, DEFAULT_ACTIVITY_LEVEL,
+  bmrFrom, emptyFatTotals, fatSubtypeKeys, fatTotalsFrom, mergeFatTotals, netCarbGoalsFrom, netCarbsFrom,
+  stepCaloriesFrom, tdeeFrom,
 } from "../../nutrition";
+import { DEFAULT_CALORIE_GOAL } from "../daily-goal";
 import { profileFrom } from "../profile";
 
 const MAX_DAYS = 366;
@@ -33,7 +35,7 @@ export async function GET(request: Request) {
     if (dates.length > MAX_DAYS) return Response.json({ error: `Choose a range of ${MAX_DAYS} days or fewer` }, { status: 400 });
 
     const db = getDb(); const owner = profileFrom(request);
-    const [foodRows, exerciseRows, sessionRows, stepRows, goalRows] = await Promise.all([
+    const [foodRows, exerciseRows, sessionRows, stepRows, goalRows, weightRows, priorWeightRows, dailyGoalRows] = await Promise.all([
       db.select({
         date: foodEntries.eatenOn,
         calories: sql<number>`sum(${foodEntries.calories})`,
@@ -79,6 +81,16 @@ export async function GET(request: Request) {
       // calorie goal only, so the report says these are the current settings
       // rather than implying they applied on every date in the range.
       db.select().from(nutritionGoals).where(eq(nutritionGoals.owner, owner)).limit(1),
+      db.select({ date: weightEntries.weighedOn, pounds: weightEntries.pounds }).from(weightEntries)
+        .where(and(eq(weightEntries.owner, owner), gte(weightEntries.weighedOn, start), lte(weightEntries.weighedOn, end))),
+      // The closest weigh-in before the range, so the first days of a range
+      // that starts between weigh-ins still have a weight to work from.
+      db.select({ date: weightEntries.weighedOn, pounds: weightEntries.pounds }).from(weightEntries)
+        .where(and(eq(weightEntries.owner, owner), lt(weightEntries.weighedOn, start)))
+        .orderBy(desc(weightEntries.weighedOn)).limit(1),
+      // The calorie goal frozen onto each day, as the calendar reads it.
+      db.select({ date: dailyGoals.goalOn, calories: dailyGoals.calories }).from(dailyGoals)
+        .where(and(eq(dailyGoals.owner, owner), gte(dailyGoals.goalOn, start), lte(dailyGoals.goalOn, end))),
     ]);
 
     const foodByDate = new Map(foodRows.map(row => [row.date, row]));
@@ -91,11 +103,38 @@ export async function GET(request: Request) {
     }
     // A day without a step entry reports null, so "not recorded" never reads as a zero-step day.
     const stepsByDate = new Map(stepRows.map(row => [row.date, row.steps]));
+    // Each day uses its own weigh-in, or else the closest earlier one. Dates run
+    // oldest to newest, so carrying the last weight forward finds it.
+    const weighIns = new Map(weightRows.map(row => [row.date, row.pounds]));
+    let carried: { date: string; pounds: number } | null = priorWeightRows[0] ?? null;
+    const body = goalRows[0];
+    const stampedGoals = new Map(dailyGoalRows.map(row => [row.date, row.calories]));
     const days = dates.map(date => {
       const food = foodByDate.get(date); const movement = exerciseByDate.get(date);
       const steps = stepsByDate.get(date);
+      const weighed = weighIns.get(date);
+      if (weighed !== undefined) carried = { date, pounds: weighed };
+      const pounds = carried?.pounds ?? null;
+      const bmr = bmrFrom({ gender: body?.gender as "male" | "female" | null | undefined, age: body?.age, heightInches: body?.heightInches, pounds });
+      const stepCalories = steps === undefined ? null : stepCaloriesFrom({ steps, pounds, heightInches: body?.heightInches });
+      const eaten = roundTwo(food?.calories ?? 0); const burned = roundTwo(movement?.calories ?? 0);
+      const logged = Number(food?.items ?? 0) > 0;
+      // Days recorded before goals were stamped fall back to the current goal.
+      const goalCalories = stampedGoals.get(date) ?? body?.calories ?? DEFAULT_CALORIE_GOAL;
+      const activityOffset = burned + (stepCalories ?? 0);
+      const adjustedIntake = logged ? roundTwo(eaten - activityOffset) : null;
+      const tdee = tdeeFrom(bmr, DEFAULT_ACTIVITY_LEVEL);
       return {
         date,
+        // Energy balance. Unknown stays null: no weight means no TDEE or step
+        // calories, and a day with no food logged has nothing to compare.
+        weightPounds: pounds, weightDate: carried?.date ?? null,
+        goalCalories, goalDifference: logged ? roundTwo(eaten - goalCalories) : null,
+        tdee, stepCalories, activityOffset: roundTwo(activityOffset), adjustedIntake,
+        // Calories eaten against TDEE: below zero is a deficit, above is an overage.
+        // TDEE already includes everyday activity, so exercise and steps are not
+        // subtracted again; the activity offset and adjusted intake are informational.
+        energyBalance: logged && tdee !== null ? roundTwo(eaten - tdee) : null,
         calories: roundTwo(food?.calories ?? 0), protein: roundTwo(food?.protein ?? 0), fat: roundTwo(food?.fat ?? 0),
         carbs: roundTwo(food?.carbs ?? 0), fiber: roundTwo(food?.fiber ?? 0),
         netCarbs: netCarbsFrom(food?.carbs ?? 0, food?.fiber ?? 0),
@@ -127,6 +166,49 @@ export async function GET(request: Request) {
       // Range-wide fat, built by merging the per-day rollups rather than by
       // running a second, separate query that could disagree with them.
       fatDetail: days.reduce<FatTotals>((sum, day) => mergeFatTotals(sum, day.fatDetail), emptyFatTotals()),
+    };
+    // Energy balance rows follow the recorded-day rule: a day counts only when
+    // food was logged for it, and each column covers the days where that figure
+    // is known (a day with no weight has no TDEE to include).
+    const known = (values: (number | null)[]) => values.filter((value): value is number => value !== null);
+    const average = (values: (number | null)[]) => {
+      const present = known(values);
+      return present.length === 0 ? null : Math.round(present.reduce((sum, value) => sum + value, 0) / present.length);
+    };
+    const total = (values: (number | null)[]) => {
+      const present = known(values);
+      return present.length === 0 ? null : Math.round(present.reduce((sum, value) => sum + value, 0));
+    };
+    const loggedDays = days.filter(day => day.items > 0);
+    const columns = {
+      eaten: loggedDays.map(day => day.calories),
+      goalDifference: loggedDays.map(day => day.goalDifference),
+      exercise: loggedDays.map(day => day.exerciseCalories),
+      stepCalories: loggedDays.map(day => day.stepCalories),
+      activityOffset: loggedDays.map(day => day.activityOffset),
+      adjustedIntake: loggedDays.map(day => day.adjustedIntake),
+      tdee: loggedDays.map(day => day.tdee),
+      energyBalance: loggedDays.map(day => day.energyBalance),
+    };
+    // Weight change over the range, from the first and last weigh-ins inside it.
+    const weighed = [...weightRows].sort((a, b) => a.date.localeCompare(b.date));
+    const firstWeighIn = weighed[0]; const lastWeighIn = weighed[weighed.length - 1];
+    const weightChange = weighed.length >= 2
+      ? {
+          startDate: firstWeighIn.date, startPounds: firstWeighIn.pounds,
+          endDate: lastWeighIn.date, endPounds: lastWeighIn.pounds,
+          pounds: roundTwo(lastWeighIn.pounds - firstWeighIn.pounds),
+        }
+      : null;
+    const energy = {
+      weightChange,
+      loggedDays: loggedDays.length,
+      daysWithTdee: loggedDays.filter(day => day.tdee !== null).length,
+      averages: Object.fromEntries(Object.entries(columns).map(([key, values]) => [key, average(values)])),
+      totals: Object.fromEntries(Object.entries(columns).map(([key, values]) => [key, total(values)])),
+      // What the report assumed, so the screen can say so rather than guess.
+      activityLevel: DEFAULT_ACTIVITY_LEVEL,
+      bodyMetricsSet: Boolean(body && body.gender && body.age && body.heightInches),
     };
     const averages = {
       caloriesPerDay: roundTwo(totals.calories / days.length),
@@ -166,6 +248,6 @@ export async function GET(request: Request) {
           saturatedFat: goal.saturatedFat ?? null, fiber: goal.fiber, waterOunces: goal.waterOunces,
         }
       : null;
-    return Response.json({ start, end, days, totals, averages, nutrition, goals });
+    return Response.json({ start, end, days, totals, averages, nutrition, energy, goals });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Unable to build the report" }, { status: 500 }); }
 }

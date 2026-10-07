@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { type Profile, addMonths, lastCompleteDate, lastCompleteDays, mediumDate } from "./shared";
+import { type Profile, addMonths, lastCompleteDate, lastCompleteDays, mediumDate, profileNames } from "./shared";
 import {
-  type ExportSection, copyText, exportFileName, fetchExport, isEmptyExport,
+  type ExportSection, copyText, energyFileName, exportFileName, fetchExport, isEmptyExport,
   saveBlob, sectionLabels, summaryFileName,
 } from "./export-shared";
+import { fetchEnergyReport } from "./energy-balance";
 import { hasSummarySection } from "./export-summary";
 
 type Props = {
@@ -20,9 +21,13 @@ type Props = {
   earliest?: string | null;
   /** Offers the concise doctor-friendly summary PDF beside the detailed exports. */
   summary?: boolean;
+  /** Offers the Energy Balance PDF, which prints the Reports tab's energy table for this range. */
+  energy?: boolean;
+  /** Replaces the default presets with one button per day count, each ending yesterday. */
+  dayPresets?: number[];
 };
 
-type Job = "" | "pdf" | "json" | "copy" | "summary";
+type Job = "" | "pdf" | "json" | "copy" | "summary" | "energy";
 
 /**
  * The export centre, shared by the Weight, Journal, and Reports screens.
@@ -32,7 +37,7 @@ type Job = "" | "pdf" | "json" | "copy" | "summary";
  * right. Dates are plain local calendar dates throughout and are handed to the
  * API as text, so nothing shifts a day when it crosses UTC midnight.
  */
-export default function ExportPanel({ profile, eyebrow, title, help, sections, earliest, summary = false }: Props) {
+export default function ExportPanel({ profile, eyebrow, title, help, sections, earliest, summary = false, energy = false, dayPresets }: Props) {
   const initial = lastCompleteDays(30);
   const [open, setOpen] = useState(false);
   const [start, setStart] = useState(initial.start);
@@ -73,6 +78,16 @@ export default function ExportPanel({ profile, eyebrow, title, help, sections, e
   async function run(job: Exclude<Job, "">) {
     setBusy(job); setError(""); setNotice("");
     try {
+      if (job === "energy") {
+        // Built from the same report the Reports tab shows, not from the
+        // section checkboxes, so it does not depend on what is ticked above.
+        const report = await fetchEnergyReport(profile, start, end);
+        const { buildEnergyPdf } = await import("./export-energy-pdf");
+        const name = energyFileName(profile, start, end);
+        saveBlob(await buildEnergyPdf({ name: profileNames[profile], start, end, days: report.days, energy: report.energy }), name);
+        setNotice(`Saved ${name}`);
+        return;
+      }
       const data = await fetchExport(profile, start, end, chosen);
       if (isEmptyExport(data)) {
         setNotice(`Nothing was recorded between ${mediumDate(start)} and ${mediumDate(end)} in the sections you chose.`);
@@ -125,12 +140,16 @@ export default function ExportPanel({ profile, eyebrow, title, help, sections, e
         <label>End<input type="date" value={end} onChange={event => applyRange(start, event.target.value)} /></label>
       </div>
       <div className="export-presets">
-        <button type="button" onClick={() => applyLastDays(7)}>7 days</button>
-        <button type="button" onClick={() => applyLastDays(30)}>30 days</button>
-        <button type="button" onClick={() => applyLastMonths(3)}>3 months</button>
-        <button type="button" onClick={() => applyLastMonths(6)}>6 months</button>
-        <button type="button" onClick={() => applyThisYear()}>This year</button>
-        {earliest && <button type="button" onClick={() => applyAllRecorded(earliest)}>All recorded</button>}
+        {dayPresets
+          ? dayPresets.map(count => <button key={count} type="button" onClick={() => applyLastDays(count)}>{count} Days</button>)
+          : <>
+            <button type="button" onClick={() => applyLastDays(7)}>7 days</button>
+            <button type="button" onClick={() => applyLastDays(30)}>30 days</button>
+            <button type="button" onClick={() => applyLastMonths(3)}>3 months</button>
+            <button type="button" onClick={() => applyLastMonths(6)}>6 months</button>
+            <button type="button" onClick={() => applyThisYear()}>This year</button>
+            {earliest && <button type="button" onClick={() => applyAllRecorded(earliest)}>All recorded</button>}
+          </>}
       </div>
 
       <fieldset className="export-sections">
@@ -150,15 +169,17 @@ export default function ExportPanel({ profile, eyebrow, title, help, sections, e
       {summary && nothingToSummarise && !rangeInvalid && <p className="form-error">The summary needs at least one section other than nutrition goals.</p>}
       {error && <p className="form-error">{error}</p>}
 
-      <div className={summary ? "export-actions four" : "export-actions"}>
+      <div className={energy ? "export-actions five" : summary ? "export-actions four" : "export-actions"}>
         <button type="button" className="primary" disabled={blocked} onClick={() => void run("pdf")}>{busy === "pdf" ? "Building PDF…" : "Download PDF"}</button>
         <button type="button" className="secondary" disabled={blocked} onClick={() => void run("json")}>{busy === "json" ? "Building JSON…" : "Download JSON"}</button>
         <button type="button" className="secondary" disabled={blocked} onClick={() => void run("copy")}>{busy === "copy" ? "Copying…" : "Copy JSON"}</button>
         {summary && <button type="button" className="secondary" disabled={blocked || nothingToSummarise} onClick={() => void run("summary")}>{busy === "summary" ? "Building summary…" : "Download Summary PDF"}</button>}
+        {energy && <button type="button" className="secondary" disabled={rangeInvalid || busy !== ""} onClick={() => void run("energy")}>{busy === "energy" ? "Building PDF…" : "Energy Balance PDF"}</button>}
       </div>
       <p className="export-filename">
         Files are named {exportFileName(profile, start, end, "pdf")}
         {summary && <> and {summaryFileName(profile, start, end)}</>}
+        {energy && <> and {energyFileName(profile, start, end)}</>}
       </p>
       {notice && <p className="export-notice" aria-live="polite">{notice}</p>}
     </div>}

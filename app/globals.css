@@ -311,7 +311,7 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 @media(max-width:430px){.method-tabs{grid-template-columns:repeat(auto-fit,minmax(52px,1fr))}.method-tabs button{font-size:10px;padding:9px 2px}.add-step+.add-step{margin-top:16px;padding-top:15px}}
 
 /* Six sections no longer fit one row on a phone, so they wrap to two. */
-@media (min-width:600px){.view-nav{grid-template-columns:repeat(7,1fr)}}
+@media (min-width:600px){.view-nav{grid-template-columns:repeat(6,1fr)}}
 
 /* Weight log */
 .weight-page{padding-top:8px}
@@ -363,6 +363,15 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 .steps-remove{width:44px;height:44px;border:1px solid #d5ded7;border-radius:11px;background:#f4f8f5;color:var(--coral);font-size:18px;cursor:pointer}
 .steps-notice{margin:9px 0 0;color:var(--sage-dark);font-size:11px;font-weight:700}
 .steps-card .form-error{margin-top:9px}
+.steps-estimate{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:12px 0 0;color:#71806f;font-size:12px}
+.steps-estimate strong{color:var(--ink);font-size:14px;font-variant-numeric:tabular-nums}
+.steps-day{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px 8px;margin:0 0 10px;padding:16px;border:1px solid #e0e5dd;border-radius:18px;background:linear-gradient(145deg,#fff,#eef4ee)}
+.steps-day-date{grid-column:1/-1;display:flex;align-items:baseline;gap:8px}
+.steps-day-date span{color:var(--muted);font-size:12px}
+.steps-day .steps-estimate{grid-column:1/-1;margin:0 0 4px}
+.steps-day input{min-width:0;min-height:44px;padding:11px 12px;border:1px solid #dcd9d0;border-radius:11px;background:white;font-size:16px;font-variant-numeric:tabular-nums;outline:none}
+.steps-day input:focus{border-color:var(--sage);box-shadow:0 0 0 3px rgba(115,150,133,.13)}
+.steps-day .primary{min-width:92px;padding:13px 16px;font-size:12px;white-space:nowrap}
 
 /* Weight history chart */
 .weight-chart-card{margin:0 0 18px;padding:18px 16px 14px;border:1px solid #e4e0d6;border-radius:20px;background:var(--card);box-shadow:0 7px 22px rgba(50,60,53,.055)}
@@ -681,3 +690,15 @@ h2 { font:600 27px/1.1 Georgia,serif; }
 /* The seven-day trend keeps the reports tables' own styling; only its units
    inside the grand-total row need toning down. */
 .report-trend tfoot i{font-style:normal;font-weight:600;font-size:10px;color:var(--muted);margin-left:2px}
+
+/* The energy balance table has nine columns, so it uses short headers, tighter
+   padding, and wrapping headers to fit the width it is given. */
+.energy-table th,.energy-table td{padding:9px 5px;font-size:11px}
+.energy-table thead th{font-size:9px;letter-spacing:.02em;white-space:normal;line-height:1.2;vertical-align:bottom}
+.energy-table tbody th,.energy-table tfoot th{max-width:84px;white-space:normal;padding-left:9px}
+.energy-table tbody th strong{font-size:11px}
+.export-actions.five{grid-template-columns:repeat(2,1fr)}
+.export-actions.five button{line-height:1.25}
+.export-actions.five button:last-child{grid-column:1/-1}
+@media(min-width:620px){.export-actions.five{grid-template-columns:repeat(3,1fr)}.export-actions.five button:last-child{grid-column:auto}}
+@media(max-width:430px){.export-actions.five button{min-height:50px;padding:11px 6px;font-size:11px}}

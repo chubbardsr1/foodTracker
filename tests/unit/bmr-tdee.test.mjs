@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  ACTIVITY_LEVELS, DEFAULT_ACTIVITY_LEVEL, activityFactor, bmrFrom, readBodyMetrics, tdeeFrom,
+  ACTIVITY_LEVELS, DEFAULT_ACTIVITY_LEVEL, activityFactor, bmrFrom, readBodyMetrics, stepCaloriesFrom, tdeeFrom,
 } from "../../app/nutrition.ts";
 
 test("BMR for a man: 10*kg + 6.25*cm - 5*age + 5", () => {
@@ -71,4 +71,19 @@ test("readBodyMetrics rejects out-of-range or malformed values", () => {
   assert.equal(readBodyMetrics({ heightInches: 0 }).ok, false);
   assert.equal(readBodyMetrics({ heightInches: 109 }).ok, false);
   assert.equal(readBodyMetrics({ gender: "unicorn" }).ok, false);
+});
+
+test("step calories: 0.57 cal per pound per mile, stride from height", () => {
+  // 70 in -> stride 28.91 in -> 63360 / 28.91 = 2191.6 steps per mile.
+  // 10,000 steps = 4.563 miles; x 0.57 x 180 lb = 468.2 -> 468
+  assert.equal(stepCaloriesFrom({ steps: 10000, pounds: 180, heightInches: 70 }), 468);
+  // No height on file falls back to 2,000 steps per mile: 5 miles x 0.57 x 180 = 513
+  assert.equal(stepCaloriesFrom({ steps: 10000, pounds: 180, heightInches: null }), 513);
+});
+
+test("step calories: zero steps is a real zero, unknown steps or weight is null", () => {
+  assert.equal(stepCaloriesFrom({ steps: 0, pounds: 180, heightInches: 70 }), 0);
+  assert.equal(stepCaloriesFrom({ steps: null, pounds: 180, heightInches: 70 }), null);
+  assert.equal(stepCaloriesFrom({ steps: 5000, pounds: null, heightInches: 70 }), null);
+  assert.equal(stepCaloriesFrom({ steps: 5000, pounds: 0, heightInches: 70 }), null);
 });

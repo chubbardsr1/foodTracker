@@ -898,6 +898,36 @@ export function tdeeFrom(bmr: number | null, activityLevelId: string): number | 
   return bmr === null ? null : Math.round(bmr * activityFactor(activityLevelId));
 }
 
+/* -------------------------------------------------------------------------
+ * Calories burned walking
+ *
+ * The usual rule of thumb: walking burns about 0.57 calories per pound of body
+ * weight per mile. Steps become miles through stride length, which averages
+ * 0.413 x height. With no height on file it falls back to the common
+ * 2,000-steps-per-mile figure. It is an estimate, never a measurement.
+ * ---------------------------------------------------------------------- */
+
+const WALKING_CALORIES_PER_POUND_MILE = 0.57;
+const STRIDE_PER_HEIGHT = 0.413;
+const INCHES_PER_MILE = 63360;
+const FALLBACK_STEPS_PER_MILE = 2000;
+
+/**
+ * Approximate calories burned by a day's steps, or null when the steps or the
+ * body weight are unknown. Zero recorded steps is a real zero, not unknown.
+ */
+export function stepCaloriesFrom(input: {
+  steps: number | null | undefined; pounds: number | null | undefined; heightInches: number | null | undefined;
+}): number | null {
+  const { steps, pounds, heightInches } = input;
+  if (typeof steps !== "number" || !Number.isFinite(steps) || steps < 0) return null;
+  if (typeof pounds !== "number" || !Number.isFinite(pounds) || pounds <= 0) return null;
+  const stepsPerMile = typeof heightInches === "number" && Number.isFinite(heightInches) && heightInches > 0
+    ? INCHES_PER_MILE / (STRIDE_PER_HEIGHT * heightInches)
+    : FALLBACK_STEPS_PER_MILE;
+  return Math.round(steps / stepsPerMile * WALKING_CALORIES_PER_POUND_MILE * pounds);
+}
+
 export type BodyMetrics = { age: number | null; heightInches: number | null; gender: Gender | null };
 export type BodyMetricsRead = { ok: true; value: BodyMetrics } | { ok: false; error: string };
 

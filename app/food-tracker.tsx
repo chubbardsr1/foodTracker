@@ -5,6 +5,10 @@ import {
   type RecapActivity, type RecapDay,
   dayRecapText, priorRange, recapDaysFromExport, recapSections, rollingDates,
 } from "./day-recap";
+import {
+  ENERGY_ASSUMPTIONS, ENERGY_COMPARISON_NOTE, ENERGY_DEFINITIONS, type EnergySummary, energyComparison, energyCoverageNote, energyDayCells,
+  energyHeaders, energySummaryCells, energyWeightNote,
+} from "./energy-balance";
 import ExportPanel from "./export-panel";
 import { exportSections as allExportSections, fetchExport } from "./export-shared";
 import {
@@ -25,7 +29,8 @@ import {
   omniMatch, profileNames, round, shortDate, weekdayLabel, whole,
 } from "./shared";
 import WeightChart from "./weight-chart";
-import WorkoutsPage from "./workouts";
+// Workouts tab disabled for now. Restore this import, the `views` entry, and the render line to bring it back.
+// import WorkoutsPage from "./workouts";
 
 type Meal = "Breakfast" | "Lunch" | "Dinner" | "Snacks";
 /** A saved diary entry. The fat subtypes are null on anything logged before the breakdown existed. */
@@ -71,14 +76,14 @@ type ScannedProduct = {
  * field reads the ceiling rather than nothing.
  */
 type Goals = { calories: number; protein: number; fat: number; netCarbs: number; netCarbsMin: number; netCarbsMax: number; saturatedFat: number | null; fiber: number; waterOunces: number; waterShortcutOne: number; waterShortcutTwo: number; waterShortcutThree: number; age: number | null; heightInches: number | null; gender: Gender | null };
-type View = "diary" | "foods" | "reports" | "calendar" | "weight" | "journal" | "workouts";
+type View = "diary" | "foods" | "reports" | "calendar" | "weight" | "steps" | "journal" | "workouts";
 type CalendarDay = {
   date: string; calories: number; items: number; goalCalories: number; goalSource: "saved" | "current";
   remaining: number; status: "none" | "under" | "over" | "way-over";
   exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string;
   steps: number; hasMovement: boolean; hasData: boolean;
 };
-type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string; movement?: ActivitySession[]; steps: number | null; fatDetail?: FatTotals };
+type ReportDay = { date: string; calories: number; protein: number; fat: number; carbs: number; fiber: number; netCarbs: number; items: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; activities: string; movement?: ActivitySession[]; steps: number | null; fatDetail?: FatTotals; weightPounds?: number | null; weightDate?: string | null; goalCalories?: number; goalDifference?: number | null; tdee?: number | null; stepCalories?: number | null; activityOffset?: number; adjustedIntake?: number | null; energyBalance?: number | null };
 type ReportTotals = { calories: number; exerciseMinutes: number; exerciseCalories: number; sessions: number; steps: number; daysInRange: number; daysWithFood: number; daysWithExercise: number; daysWithSteps: number; fatDetail?: FatTotals };
 /** Averages over the days holding at least one food entry, from the reports feed. */
 type ReportNutrition = { recordedDays: number; averages: NutritionAverages; subtypeDays: Partial<Record<string, number>> };
@@ -91,11 +96,13 @@ const defaultGoals: Goals = { calories: 1600, protein: 110, fat: 105, netCarbs: 
 const views: { id: View; label: string; title: string; eyebrow: string }[] = [
   { id: "diary", label: "Diary", title: "Nourish", eyebrow: "Daily Food Tracker" },
   { id: "foods", label: "My Foods", title: "My Foods", eyebrow: "Reusable entries" },
-  { id: "calendar", label: "Calendar", title: "Calendar", eyebrow: "Day by day" },
+  // Calendar tab disabled for now. Restore this entry and the render line to bring it back.
+  // { id: "calendar", label: "Calendar", title: "Calendar", eyebrow: "Day by day" },
   { id: "reports", label: "Reports", title: "Reports", eyebrow: "Calories & movement" },
   { id: "weight", label: "Weight", title: "Weight", eyebrow: "Your weight log" },
+  { id: "steps", label: "Steps", title: "Steps", eyebrow: "Daily steps" },
   { id: "journal", label: "Journal", title: "Journal", eyebrow: "Daily recap" },
-  { id: "workouts", label: "Workouts", title: "Workouts", eyebrow: "Programs & training" },
+  // { id: "workouts", label: "Workouts", title: "Workouts", eyebrow: "Programs & training" },
 ];
 const weekdayInitials = ["S", "M", "T", "W", "T", "F", "S"];
 /** Sensible starting meal when the Add food button does not know which one. */
@@ -116,6 +123,19 @@ const nutritionLabels: Record<string, string> = {
 /** An empty number input must stay empty, so a null prefill becomes undefined. */
 const fieldValue = (value: number | null | undefined) => value ?? undefined;
 const barcodeDigits = (value: string) => value.replace(/\D/g, "");
+/**
+ * Each day's steps and estimated step calories for a range.
+ *
+ * The estimate comes from the reports feed, which applies the one shared
+ * stepCaloriesFrom formula to the weight on file, so the diary, the Steps page,
+ * and the Reports tables can never disagree about it.
+ */
+async function fetchStepDays(headers: Record<string, string>, start: string, end: string) {
+  const response = await fetch(`/api/reports?start=${start}&end=${end}`, { headers });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error ?? "Unable to estimate step calories");
+  return (data.days ?? []) as Pick<ReportDay, "date" | "steps" | "stepCalories">[];
+}
 function monthKey(date: string) { return date.slice(0, 7); }
 function shiftMonth(month: string, step: number) {
   const [year, index] = month.split("-").map(Number);
@@ -131,6 +151,8 @@ export default function FoodTracker() {
   const [water, setWater] = useState<WaterEntry[]>([]);
   const [exercise, setExercise] = useState<ExerciseEntry[]>([]);
   const [steps, setSteps] = useState<StepEntry | null>(null);
+  // Tagged with its date so an estimate for one day is never shown under another.
+  const [stepCalories, setStepCalories] = useState<{ date: string; value: number | null } | null>(null);
   const [goals, setGoals] = useState<Goals>(defaultGoals);
   const [loading, setLoading] = useState(true);
   // `locked` is true when the meal is already known, e.g. the + on a meal card.
@@ -205,6 +227,18 @@ export default function FoodTracker() {
     finally { setLoading(false); }
   }
   useEffect(() => { void loadDay(date); }, [date, profile]);
+  // The Steps card's calorie estimate. Kept apart from loadDay so a slow report
+  // never delays the diary, and re-run when the day's steps change so the card
+  // stays current. Null (shown as a dash) when steps or a weigh-in are missing.
+  const stepsForEstimate = steps ? steps.steps : null;
+  useEffect(() => {
+    if (!profile || view !== "diary") return;
+    let live = true;
+    fetchStepDays(headers, date, date)
+      .then(days => { if (live) setStepCalories({ date, value: days[0]?.stepCalories ?? null }); })
+      .catch(() => { if (live) setStepCalories({ date, value: null }); });
+    return () => { live = false; };
+  }, [date, profile, view, stepsForEstimate, headers]);
   /**
    * Loads the recap history for the day on screen.
    *
@@ -334,7 +368,7 @@ export default function FoodTracker() {
 
   function selectProfile(next: Profile) {
     window.localStorage.setItem("foodTrackerProfile", next);
-    setEntries([]); setWater([]); setExercise([]); setSteps(null); setGoals(defaultGoals);
+    setEntries([]); setWater([]); setExercise([]); setSteps(null); setStepCalories(null); setGoals(defaultGoals);
     // The recap history belongs to the profile it was fetched for and is
     // dropped here rather than left to be pasted under the other one.
     setRecap({ profile: null, date: "", priorDays: null, journal: null });
@@ -428,13 +462,14 @@ export default function FoodTracker() {
     {view === "foods" && <MyFoodsPage profile={profile}
       onFoodsChanged={() => setSavedFoodsVersion(current => current + 1)}
       onCopyToToday={(values, meal, copiedFrom) => setAddTarget({ meal, locked: false, date: localDate(), prefill: values, copiedFrom })} />}
-    {view === "calendar" && <CalendarPage profile={profile} onOpenDay={date => { setDate(date); setView("diary"); }} />}
+    {/* {view === "calendar" && <CalendarPage profile={profile} onOpenDay={date => { setDate(date); setView("diary"); }} />} */}
     {view === "reports" && <ReportsPage profile={profile} />}
     {view === "weight" && <WeightPage profile={profile} goals={goals} />}
+    {view === "steps" && <StepsPage profile={profile} />}
     {view === "journal" && <JournalPage profile={profile} />}
     {/* A finished workout writes one activity entry, so the day is reloaded to
         pick it up rather than left showing the diary as it was. */}
-    {view === "workouts" && <WorkoutsPage profile={profile} onActivityChanged={() => void loadDay(date)} />}
+    {/* {view === "workouts" && <WorkoutsPage profile={profile} onActivityChanged={() => void loadDay(date)} />} */}
 
     {view === "diary" && <>
       <section className="date-nav" aria-label="Choose tracking date">
@@ -473,7 +508,7 @@ export default function FoodTracker() {
           <button onClick={() => void removeExercise(item.id)} aria-label={`Remove ${item.activity}`}>×</button>
         </div>)}</div>}
       </section>
-      <StepsCard key={`${profile}:${date}`} date={date} profile={profile} entry={steps}
+      <StepsCard key={`${profile}:${date}`} date={date} profile={profile} entry={steps} calories={stepCalories?.date === date ? stepCalories.value : null}
         onSaved={entry => setSteps(entry)} onRemoved={() => setSteps(null)} onError={setMessage} />
       <section className="water-card">
         <div className="water-heading"><div className="water-drop">◒</div><div><p className="eyebrow">Hydration</p><h2>{amount(waterTotal)} <small>of {goals.waterOunces} oz</small></h2></div></div>
@@ -552,8 +587,8 @@ export default function FoodTracker() {
  * row for the same date. The value is validated here as well as on the server
  * so a decimal or a negative is refused before it leaves the phone.
  */
-function StepsCard({ date, profile, entry, onSaved, onRemoved, onError }: {
-  date: string; profile: Profile; entry: StepEntry | null;
+function StepsCard({ date, profile, entry, calories, onSaved, onRemoved, onError }: {
+  date: string; profile: Profile; entry: StepEntry | null; calories: number | null;
   onSaved: (entry: StepEntry) => void; onRemoved: () => void; onError: (message: string) => void;
 }) {
   const [value, setValue] = useState(entry ? String(entry.steps) : "");
@@ -593,6 +628,7 @@ function StepsCard({ date, profile, entry, onSaved, onRemoved, onError }: {
       <div className="steps-icon" aria-hidden="true">⇡</div>
       <div><p className="eyebrow">Steps</p><h2>{entry ? whole(entry.steps) : "—"} <small>{entry ? "steps today" : "not recorded"}</small></h2></div>
     </div>
+    <p className="steps-estimate"><span>Estimated calories burned</span><strong>{calories === null ? "—" : `${whole(calories)} cal`}</strong></p>
     <form className="steps-form" onSubmit={save}>
       <label className="sr-label" htmlFor={`steps-${date}`}>Steps for this day</label>
       <input id={`steps-${date}`} inputMode="numeric" pattern="[0-9]*" type="number" min="0" max="200000" step="1"
@@ -604,6 +640,78 @@ function StepsCard({ date, profile, entry, onSaved, onRemoved, onError }: {
     {error && <p className="form-error">{error}</p>}
     {notice && <p className="steps-notice" aria-live="polite">{notice}</p>}
   </section>;
+}
+
+/**
+ * The last seven days of steps, each editable in place.
+ *
+ * The page is a snapshot of what was loaded when it opened. Saving writes the
+ * day through the same endpoint as the diary's Steps card but deliberately
+ * leaves everything on screen alone: no refetch, no recalculated estimate, and
+ * no text that changes size. That keeps the page from jumping under a thumb
+ * mid-scroll. A refresh picks up the saved numbers and their new estimates.
+ */
+function StepsPage({ profile }: { profile: Profile }) {
+  const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
+  const [days, setDays] = useState<Pick<ReportDay, "date" | "steps" | "stepCalories">[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    const end = localDate();
+    fetchStepDays(headers, addDays(end, -6), end)
+      // Newest first, so today is at the top.
+      .then(loaded => { if (live) setDays([...loaded].reverse()); })
+      .catch(reason => { if (live) setError(reason instanceof Error ? reason.message : "Unable to load steps"); });
+    return () => { live = false; };
+  }, [headers]);
+
+  return <section className="report-page">
+    <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Steps</h2></div><span>Last 7 days</span></div>
+    <p className="page-help">Edit any day and save. Calories are estimated from steps and your latest weigh-in. Saved changes show here after you refresh the page.</p>
+    {error && <p className="form-error">{error}</p>}
+    {!error && days === null && <div className="empty-state">Loading your steps…</div>}
+    {days && days.map(day => <StepsDayRow key={day.date} day={day} profile={profile} />)}
+  </section>;
+}
+
+function StepsDayRow({ day, profile }: { day: Pick<ReportDay, "date" | "steps" | "stepCalories">; profile: Profile }) {
+  const initial = day.steps === null ? "" : String(day.steps);
+  const [value, setValue] = useState(initial);
+  // What the server holds for this day; compared against so the button knows
+  // when there is something new to save.
+  const [stored, setStored] = useState(initial);
+  const [status, setStatus] = useState<"idle" | "saving" | "error">("idle");
+  const trimmed = value.trim();
+  const valid = /^\d+$/.test(trimmed) && Number(trimmed) <= 200000;
+  const dirty = trimmed !== stored;
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!valid || !dirty) return;
+    setStatus("saving");
+    try {
+      const response = await fetch("/api/steps", {
+        method: "PUT", headers: { "x-food-tracker-profile": profile, "content-type": "application/json" },
+        body: JSON.stringify({ steppedOn: day.date, steps: Number(trimmed) }),
+      });
+      if (!response.ok) throw new Error("save failed");
+      setStored(trimmed); setStatus("idle");
+    } catch { setStatus("error"); }
+  }
+
+  return <form className="steps-day" onSubmit={save}>
+    <div className="steps-day-date"><strong>{weekdayLabel(day.date)}</strong><span>{shortDate(day.date)}</span></div>
+    <p className="steps-estimate"><span>Estimated calories burned</span><strong>{day.stepCalories == null ? "—" : `${whole(day.stepCalories)} cal`}</strong></p>
+    <label className="sr-label" htmlFor={`steps-day-${day.date}`}>Steps for {longDate(day.date)}</label>
+    <input id={`steps-day-${day.date}`} inputMode="numeric" pattern="[0-9]*" type="number" min="0" max="200000" step="1"
+      placeholder="e.g. 8500" value={value}
+      onChange={event => { setValue(event.target.value); if (status === "error") setStatus("idle"); }} />
+    <button type="submit" className="primary" aria-live="polite"
+      disabled={status === "saving" || !valid || !dirty}>
+      {status === "saving" ? "Saving…" : status === "error" ? "Retry" : !dirty && stored !== initial ? "Saved" : stored === "" ? "Save" : "Update"}
+    </button>
+  </form>;
 }
 
 function MyFoodsPage({ profile, onFoodsChanged, onCopyToToday }: {
@@ -987,7 +1095,7 @@ function ReportsPage({ profile }: { profile: Profile }) {
   const initial = lastCompleteDays(7);
   const [start, setStart] = useState(initial.start);
   const [end, setEnd] = useState(initial.end);
-  const [report, setReport] = useState<{ key: string; days: ReportDay[]; totals: ReportTotals | null; averages: ReportAverages | null; nutrition: ReportNutrition | null; goals: ReportGoals | null } | null>(null);
+  const [report, setReport] = useState<{ key: string; days: ReportDay[]; totals: ReportTotals | null; averages: ReportAverages | null; nutrition: ReportNutrition | null; energy: EnergySummary | null; goals: ReportGoals | null } | null>(null);
   const [error, setError] = useState("");
   const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
   const rangeInvalid = start > end;
@@ -998,8 +1106,8 @@ function ReportsPage({ profile }: { profile: Profile }) {
     let active = true;
     fetch(`/api/reports?start=${start}&end=${end}`, { headers })
       .then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? "Unable to build the report"); return data; })
-      .then(data => { if (!active) return; setError(""); setReport({ key: rangeKey, days: data.days ?? [], totals: data.totals ?? null, averages: data.averages ?? null, nutrition: data.nutrition ?? null, goals: data.goals ?? null }); })
-      .catch(reason => { if (!active) return; setError(reason instanceof Error ? reason.message : "Unable to build the report"); setReport({ key: rangeKey, days: [], totals: null, averages: null, nutrition: null, goals: null }); });
+      .then(data => { if (!active) return; setError(""); setReport({ key: rangeKey, days: data.days ?? [], totals: data.totals ?? null, averages: data.averages ?? null, nutrition: data.nutrition ?? null, energy: data.energy ?? null, goals: data.goals ?? null }); })
+      .catch(reason => { if (!active) return; setError(reason instanceof Error ? reason.message : "Unable to build the report"); setReport({ key: rangeKey, days: [], totals: null, averages: null, nutrition: null, energy: null, goals: null }); });
     return () => { active = false; };
   }, [rangeKey, rangeInvalid, start, end, headers]);
 
@@ -1009,6 +1117,7 @@ function ReportsPage({ profile }: { profile: Profile }) {
   const totals = ready ? report.totals : null;
   const averages = ready ? report.averages : null;
   const nutrition = ready ? report.nutrition : null;
+  const energy = ready ? report.energy : null;
   const reportGoals = ready ? report.goals : null;
   const loading = !rangeInvalid && !ready;
 
@@ -1017,14 +1126,19 @@ function ReportsPage({ profile }: { profile: Profile }) {
   function applyLastDays(count: number) { const range = lastCompleteDays(count); setStart(range.start); setEnd(range.end); }
   const maxCalories = days.reduce((high, day) => Math.max(high, day.calories), 0);
   const maxMinutes = days.reduce((high, day) => Math.max(high, day.exerciseMinutes), 0);
+  // Summed over the days that have an estimate; a day without steps or a
+  // weigh-in has none and is left out, as it is for the step average above.
+  const knownStepCalories = days.flatMap(day => day.stepCalories == null ? [] : [day.stepCalories]);
+  const stepCalorieTotal = knownStepCalories.reduce((sum, value) => sum + value, 0);
+  const stepCaloriesPerKnownDay = knownStepCalories.length > 0 ? Math.round(stepCalorieTotal / knownStepCalories.length) : 0;
 
   return <section className="report-page">
     <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Calories & movement</h2></div><span>{days.length} {days.length === 1 ? "day" : "days"}</span></div>
     <p className="page-help">Every date in the range is listed. Days without entries show zero, and a day with no step entry shows a dash rather than a zero.</p>
 
     <ExportPanel profile={profile} eyebrow="Export centre" title="Export everything"
-      help="A complete export of this profile. Pick a date range, keep or clear any section, then take it as a printable PDF or as JSON for an analysis tool. Download Summary PDF gives the same range as a one-page overview for a doctor, averaged over recorded days only."
-      sections={[...allExportSections]} summary />
+      help="A complete export of this profile. Pick a date range, keep or clear any section, then take it as a printable PDF or as JSON for an analysis tool. Download Summary PDF gives the same range as a one-page overview for a doctor, averaged over recorded days only. Energy Balance PDF prints the Energy balance table for the range."
+      sections={[...allExportSections]} summary energy dayPresets={[7, 14, 21, 30, 60]} />
 
     <div className="report-range">
       <label>Start<input type="date" value={start} max={end} onChange={event => setStart(event.target.value)} /></label>
@@ -1066,20 +1180,23 @@ function ReportsPage({ profile }: { profile: Profile }) {
       <div className="report-table-wrap">
         <table className="report-table">
           <caption className="report-visually-hidden">Daily calories and movement for {profileNames[profile]}</caption>
-          <thead><tr><th scope="col">Day</th><th scope="col">Calories</th><th scope="col">Minutes</th><th scope="col">Burned</th><th scope="col">Steps</th></tr></thead>
+          <thead><tr><th scope="col">Day</th><th scope="col">Calories</th><th scope="col">Minutes</th><th scope="col">Burned</th><th scope="col">Steps</th><th scope="col">Step Calories</th></tr></thead>
           <tbody>{days.map(day => <tr key={day.date} className={day.items === 0 && day.sessions === 0 && day.steps === null ? "report-empty-day" : ""}>
             <th scope="row"><strong>{weekdayLabel(day.date)} {shortDate(day.date)}</strong>{day.activities && <small>{day.activities}</small>}</th>
             <td>{amount(day.calories)}</td><td>{amount(day.exerciseMinutes)}</td><td>{amount(day.exerciseCalories)}</td>
             <td>{day.steps === null ? "—" : whole(day.steps)}</td>
+            <td>{day.stepCalories == null ? "—" : whole(day.stepCalories)}</td>
           </tr>)}</tbody>
-          <tfoot><tr><th scope="row">Total</th><td>{amount(totals?.calories ?? 0)}</td><td>{amount(totals?.exerciseMinutes ?? 0)}</td><td>{amount(totals?.exerciseCalories ?? 0)}</td><td>{whole(totals?.steps ?? 0)}</td></tr>
-            <tr><th scope="row">Daily average</th><td>{amount(averages?.caloriesPerDay ?? 0)}</td><td>{amount(averages?.exerciseMinutesPerDay ?? 0)}</td><td>{amount(Math.round((totals?.exerciseCalories ?? 0) / days.length * 100) / 100)}</td><td>{whole(averages?.stepsPerRecordedDay ?? 0)}</td></tr></tfoot>
+          <tfoot><tr><th scope="row">Total</th><td>{amount(totals?.calories ?? 0)}</td><td>{amount(totals?.exerciseMinutes ?? 0)}</td><td>{amount(totals?.exerciseCalories ?? 0)}</td><td>{whole(totals?.steps ?? 0)}</td><td>{whole(stepCalorieTotal)}</td></tr>
+            <tr><th scope="row">Daily average</th><td>{amount(averages?.caloriesPerDay ?? 0)}</td><td>{amount(averages?.exerciseMinutesPerDay ?? 0)}</td><td>{amount(Math.round((totals?.exerciseCalories ?? 0) / days.length * 100) / 100)}</td><td>{whole(averages?.stepsPerRecordedDay ?? 0)}</td><td>{whole(stepCaloriesPerKnownDay)}</td></tr></tfoot>
         </table>
       </div>
 
       <NutritionAveragesTable nutrition={nutrition} fat={totals?.fatDetail ?? emptyFatTotals()} goals={reportGoals} />
 
       <SevenDayNutritionTrend key={profile} profile={profile} />
+
+      <EnergyBalanceTrend days={days} energy={energy} />
 
       {days.some(day => (day.movement ?? []).length > 0) && <div className="report-movement">
         <h3>Movement log</h3>
@@ -1183,6 +1300,52 @@ function SevenDayNutritionTrend({ profile }: { profile: Profile }) {
               and grams are never added together.
             </p>
           </>}
+  </div>;
+}
+
+/**
+ * Daily energy balance for the report's own date range. Labels, wording, and
+ * number formatting come from `energy-balance.ts`, which the Energy Balance PDF
+ * uses too; the figures come from `/api/reports`.
+ *
+ * Days with no food logged are left out of the comparisons, averages, and
+ * totals, and anything that cannot be worked out shows a dash, never a zero.
+ */
+function EnergyBalanceTrend({ days, energy }: { days: ReportDay[]; energy: EnergySummary | null }) {
+  const summaryRow = (label: string, values: EnergySummary["averages"] | undefined) => <tr>
+    <th scope="row">{label}</th>
+    {energySummaryCells(values).map((text, index) => <td key={index}>{text}</td>)}
+  </tr>;
+
+  return <div className="report-nutrition report-trend">
+    <h3>Energy balance</h3>
+    <p className="page-help">{ENERGY_DEFINITIONS}</p>
+    {energy && !energy.bodyMetricsSet && <p className="form-error">
+      Set your age, height, and gender in Settings to see TDEE. A weight on or before each day is also needed.
+    </p>}
+    <div className="report-table-wrap">
+      <table className="report-table energy-table">
+        <caption className="report-visually-hidden">Daily calories eaten against goal, activity offset, adjusted intake, TDEE, and estimated deficit or overage</caption>
+        <thead><tr>{energyHeaders.map(header => <th key={header} scope="col">{header}</th>)}</tr></thead>
+        <tbody>{days.map(day => {
+          const cells = energyDayCells(day); const weight = energyWeightNote(day);
+          return <tr key={day.date} className={day.items === 0 && day.sessions === 0 && day.steps === null ? "report-empty-day" : ""}>
+            <th scope="row"><strong>{weekdayLabel(day.date)} {shortDate(day.date)}</strong>{weight && <small>{weight}</small>}</th>
+            {cells.map((text, index) => <td key={index}>{index === cells.length - 1 ? <strong>{text}</strong> : text}</td>)}
+          </tr>;
+        })}</tbody>
+        <tfoot>
+          {summaryRow("Daily average", energy?.averages)}
+          {summaryRow("Total", energy?.totals)}
+        </tfoot>
+      </table>
+    </div>
+    <div className="report-stats">
+      {energyComparison(energy).map(item => <div className="report-stat" key={item.label}>
+        <span>{item.label}</span><strong>{item.value}</strong><small>{item.detail}</small>
+      </div>)}
+    </div>
+    <p className="page-help">{energyCoverageNote(days.length, energy)} {ENERGY_COMPARISON_NOTE} {ENERGY_ASSUMPTIONS} A date in parentheses is the weigh-in being used.</p>
   </div>;
 }
 

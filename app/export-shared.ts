@@ -72,6 +72,11 @@ export function summaryFileName(profile: Profile, start: string, end: string) {
   return `${profile}-health-summary-${start}-to-${end}.pdf`;
 }
 
+/** e.g. chris-energy-balance-2026-07-26-to-2026-08-24.pdf */
+export function energyFileName(profile: Profile, start: string, end: string) {
+  return `${profile}-energy-balance-${start}-to-${end}.pdf`;
+}
+
 /** How many rows each chosen section actually holds, used for the "nothing here" message. */
 export function sectionCounts(data: ExportPayload) {
   const counts: Partial<Record<ExportSection, number>> = {};
