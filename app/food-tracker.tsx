@@ -134,7 +134,7 @@ async function fetchStepDays(headers: Record<string, string>, start: string, end
   const response = await fetch(`/api/reports?start=${start}&end=${end}`, { headers });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error ?? "Unable to estimate step calories");
-  return (data.days ?? []) as Pick<ReportDay, "date" | "steps" | "stepCalories">[];
+  return (data.days ?? []) as Pick<ReportDay, "date" | "steps" | "stepCalories" | "tdee" | "weightPounds" | "weightDate">[];
 }
 function monthKey(date: string) { return date.slice(0, 7); }
 function shiftMonth(month: string, step: number) {
@@ -153,6 +153,8 @@ export default function FoodTracker() {
   const [steps, setSteps] = useState<StepEntry | null>(null);
   // Tagged with its date so an estimate for one day is never shown under another.
   const [stepCalories, setStepCalories] = useState<{ date: string; value: number | null } | null>(null);
+  // The day's TDEE and the weigh-in it rests on, from the same reports feed.
+  const [dayTdee, setDayTdee] = useState<{ date: string; tdee: number | null; pounds: number | null; weighedOn: string | null } | null>(null);
   const [goals, setGoals] = useState<Goals>(defaultGoals);
   const [loading, setLoading] = useState(true);
   // `locked` is true when the meal is already known, e.g. the + on a meal card.
@@ -235,8 +237,12 @@ export default function FoodTracker() {
     if (!profile || view !== "diary") return;
     let live = true;
     fetchStepDays(headers, date, date)
-      .then(days => { if (live) setStepCalories({ date, value: days[0]?.stepCalories ?? null }); })
-      .catch(() => { if (live) setStepCalories({ date, value: null }); });
+      .then(days => {
+        if (!live) return;
+        setStepCalories({ date, value: days[0]?.stepCalories ?? null });
+        setDayTdee({ date, tdee: days[0]?.tdee ?? null, pounds: days[0]?.weightPounds ?? null, weighedOn: days[0]?.weightDate ?? null });
+      })
+      .catch(() => { if (live) { setStepCalories({ date, value: null }); setDayTdee({ date, tdee: null, pounds: null, weighedOn: null }); } });
     return () => { live = false; };
   }, [date, profile, view, stepsForEstimate, headers]);
   /**
@@ -484,6 +490,7 @@ export default function FoodTracker() {
         <div className="calorie-ring" style={{ "--progress": `${Math.min(100, totals.calories / goals.calories * 100)}%` } as React.CSSProperties}><div><strong>{Math.round(totals.calories)}</strong><span>of {goals.calories}</span></div></div>
         <div className="summary-copy"><span>CALORIES</span><strong>{Math.max(0, Math.round(goals.calories - totals.calories))} remaining</strong><small>{totals.calories > goals.calories ? `${Math.round(totals.calories - goals.calories)} over goal` : "You’re on track"}</small></div>
       </section>
+      <TdeeCard date={date} eaten={totals.calories} logged={entries.length > 0} goals={goals} day={dayTdee?.date === date ? dayTdee : null} />
       <CarbCard totals={carbDetail} goals={netCarbGoals} standing={netCarbStanding} onOpen={() => setCarbDetailOpen(true)} />
       <section className="macro-grid">
         <Macro label="Protein" value={round(totals.protein)} goal={goals.protein} color="coral" />
@@ -1090,6 +1097,12 @@ function DayDetail({ day, profile, onClose, onOpenDay, onSaved }: { day: Calenda
   </div></div>;
 }
 
+type ReportSection = "overview" | "nutrition" | "energy" | "movement";
+const reportSections: { id: ReportSection; label: string }[] = [
+  { id: "overview", label: "Overview" }, { id: "nutrition", label: "Nutrition" },
+  { id: "energy", label: "Energy" }, { id: "movement", label: "Movement" },
+];
+
 function ReportsPage({ profile }: { profile: Profile }) {
   // Presets and this default end on the last completed day; see lastCompleteDays.
   const initial = lastCompleteDays(7);
@@ -1097,6 +1110,8 @@ function ReportsPage({ profile }: { profile: Profile }) {
   const [end, setEnd] = useState(initial.end);
   const [report, setReport] = useState<{ key: string; days: ReportDay[]; totals: ReportTotals | null; averages: ReportAverages | null; nutrition: ReportNutrition | null; energy: EnergySummary | null; goals: ReportGoals | null } | null>(null);
   const [error, setError] = useState("");
+  // Always opens on Overview; the choice is not remembered between visits.
+  const [section, setSection] = useState<ReportSection>("overview");
   const headers = useMemo(() => ({ "x-food-tracker-profile": profile }), [profile]);
   const rangeInvalid = start > end;
   const rangeKey = `${profile}:${start}:${end}`;
@@ -1132,13 +1147,24 @@ function ReportsPage({ profile }: { profile: Profile }) {
   const stepCalorieTotal = knownStepCalories.reduce((sum, value) => sum + value, 0);
   const stepCaloriesPerKnownDay = knownStepCalories.length > 0 ? Math.round(stepCalorieTotal / knownStepCalories.length) : 0;
 
+  // One line under the sub-tabs saying what the open section shows for this range.
+  const recordedDays = nutrition?.recordedDays ?? 0;
+  const energyBalance = energy?.totals.energyBalance ?? null;
+  const takeaways: Record<ReportSection, string> = {
+    overview: `Average ${whole(averages?.caloriesPerLoggedDay ?? 0)} cal per logged day · ${totals?.daysWithFood ?? 0} of ${days.length} days logged · ${whole(averages?.stepsPerRecordedDay ?? 0)} steps per recorded day`,
+    nutrition: recordedDays === 0
+      ? "No food was recorded in this range."
+      : `Per recorded day: ${whole(nutrition?.averages.calories ?? 0)} cal · ${amount(nutrition?.averages.protein ?? 0)} g protein · ${amount(nutrition?.averages.fat ?? 0)} g fat · ${amount(nutrition?.averages.fiber ?? 0)} g fiber`,
+    energy: energyBalance === null
+      ? "Estimated deficit needs food logged on a day with a TDEE."
+      : `Estimated ${energyBalance > 0 ? "overage" : "deficit"} of ${whole(Math.abs(energyBalance))} cal against TDEE over ${energy?.daysWithTdee ?? 0} ${energy?.daysWithTdee === 1 ? "day" : "days"}`,
+    movement: (totals?.sessions ?? 0) === 0
+      ? "No movement recorded in this range."
+      : `${totals?.sessions ?? 0} ${totals?.sessions === 1 ? "session" : "sessions"} · ${amount(totals?.exerciseMinutes ?? 0)} min · ${amount(totals?.exerciseCalories ?? 0)} cal burned across ${totals?.daysWithExercise ?? 0} ${totals?.daysWithExercise === 1 ? "day" : "days"}`,
+  };
+
   return <section className="report-page">
     <div className="section-heading"><div><p className="eyebrow">{profileNames[profile]} only</p><h2>Calories & movement</h2></div><span>{days.length} {days.length === 1 ? "day" : "days"}</span></div>
-    <p className="page-help">Every date in the range is listed. Days without entries show zero, and a day with no step entry shows a dash rather than a zero.</p>
-
-    <ExportPanel profile={profile} eyebrow="Export centre" title="Export everything"
-      help="A complete export of this profile. Pick a date range, keep or clear any section, then take it as a printable PDF or as JSON for an analysis tool. Download Summary PDF gives the same range as a one-page overview for a doctor, averaged over recorded days only. Energy Balance PDF prints the Energy balance table for the range."
-      sections={[...allExportSections]} summary energy dayPresets={[7, 14, 21, 30, 60]} />
 
     <div className="report-range">
       <label>Start<input type="date" value={start} max={end} onChange={event => setStart(event.target.value)} /></label>
@@ -1152,6 +1178,13 @@ function ReportsPage({ profile }: { profile: Profile }) {
 
     {(rangeInvalid || error) && <p className="form-error">{rangeInvalid ? "The start date must come before the end date." : error}</p>}
     {rangeInvalid ? <div className="empty-state">Choose a valid date range.</div> : loading ? <div className="empty-state">Building your report…</div> : days.length === 0 ? <div className="empty-state">No dates in this range.</div> : <>
+      <div className="subtab-toggle" role="tablist" aria-label="Report section">
+        {reportSections.map(item => <button key={item.id} type="button" role="tab" aria-selected={section === item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}>{item.label}</button>)}
+      </div>
+      <p className="report-takeaway" aria-live="polite">{takeaways[section]}</p>
+
+      {section === "overview" && <>
+      <p className="page-help">Every date in the range is listed. Days without entries show zero, and a day with no step entry shows a dash rather than a zero.</p>
       <div className="report-stats">
         <div className="report-stat"><span>Total calories</span><strong>{amount(totals?.calories ?? 0)}</strong><small>{totals?.daysWithFood ?? 0} of {days.length} days logged</small></div>
         <div className="report-stat"><span>Average per day</span><strong>{amount(averages?.caloriesPerDay ?? 0)}</strong><small>{amount(averages?.caloriesPerLoggedDay ?? 0)} per logged day</small></div>
@@ -1191,16 +1224,19 @@ function ReportsPage({ profile }: { profile: Profile }) {
             <tr><th scope="row">Daily average</th><td>{amount(averages?.caloriesPerDay ?? 0)}</td><td>{amount(averages?.exerciseMinutesPerDay ?? 0)}</td><td>{amount(Math.round((totals?.exerciseCalories ?? 0) / days.length * 100) / 100)}</td><td>{whole(averages?.stepsPerRecordedDay ?? 0)}</td><td>{whole(stepCaloriesPerKnownDay)}</td></tr></tfoot>
         </table>
       </div>
+      </>}
 
-      <NutritionAveragesTable nutrition={nutrition} fat={totals?.fatDetail ?? emptyFatTotals()} goals={reportGoals} />
+      {section === "nutrition" && <>
+        <NutritionAveragesTable nutrition={nutrition} fat={totals?.fatDetail ?? emptyFatTotals()} goals={reportGoals} />
+        <SevenDayNutritionTrend key={profile} profile={profile} />
+      </>}
 
-      <SevenDayNutritionTrend key={profile} profile={profile} />
+      {section === "energy" && <EnergyBalanceTrend days={days} energy={energy} />}
 
-      <EnergyBalanceTrend days={days} energy={energy} />
-
-      {days.some(day => (day.movement ?? []).length > 0) && <div className="report-movement">
+      {section === "movement" && <div className="report-movement">
         <h3>Movement log</h3>
         <p className="page-help">Each recorded activity in this range, with the comments saved against it.</p>
+        {!days.some(day => (day.movement ?? []).length > 0) && <div className="empty-state">No movement recorded in this range.</div>}
         {days.filter(day => (day.movement ?? []).length > 0).map(day => <div className="report-movement-day" key={day.date}>
           <p className="report-movement-date">{weekdayLabel(day.date)} {shortDate(day.date)}</p>
           {(day.movement ?? []).map((item, index) => <div className="report-movement-row" key={index}>
@@ -1211,6 +1247,10 @@ function ReportsPage({ profile }: { profile: Profile }) {
         </div>)}
       </div>}
     </>}
+
+    <ExportPanel profile={profile} eyebrow="Export centre" title="Export everything"
+      help="A complete export of this profile. Pick a date range, keep or clear any section, then take it as a printable PDF or as JSON for an analysis tool. Download Summary PDF gives the same range as a one-page overview for a doctor, averaged over recorded days only. Energy Balance PDF prints the Energy balance table for the range."
+      sections={[...allExportSections]} summary energy dayPresets={[7, 14, 21, 30, 60]} />
   </section>;
 }
 
@@ -1893,6 +1933,41 @@ function Macro({ label, value, goal, color, onOpen, openLabel }: { label: string
     {body}
     <span className="macro-more" aria-hidden="true">Breakdown</span>
   </button>;
+}
+
+/**
+ * Calories eaten against the day's TDEE, under the calorie ring.
+ *
+ * The TDEE comes from the reports feed, so it rests on the same weight the
+ * Reports tab uses: that day's weigh-in, or the closest earlier one. The
+ * difference is worked out here from the live diary total, so it moves as food
+ * is added. Until something is logged there is nothing to compare, matching
+ * the Reports tab, and a missing profile detail or weigh-in says what is needed
+ * instead of showing a guess.
+ */
+function TdeeCard({ date, eaten, logged, goals, day }: {
+  date: string; eaten: number; logged: boolean; goals: Goals;
+  day: { tdee: number | null; pounds: number | null; weighedOn: string | null } | null;
+}) {
+  if (!day) return null;
+  if (day.tdee === null) {
+    const needsProfile = goals.age === null || goals.heightInches === null || goals.gender === null;
+    return <section className="tdee-card" aria-label="Estimated TDEE">
+      <div><span>TDEE</span><strong>—</strong></div>
+      <small>{needsProfile ? "Set your age, height, and gender in Settings to see TDEE." : "Log a weight on the Weight tab to see TDEE."}</small>
+    </section>;
+  }
+  const difference = Math.round(eaten) - day.tdee;
+  const state = !logged ? "none" : difference > 0 ? "over" : "under";
+  return <section className={`tdee-card tdee-${state}`} aria-label="Estimated TDEE">
+    <div><span>TDEE</span><strong>{whole(day.tdee)}</strong></div>
+    <div className="tdee-gap"><span>{state === "over" ? "Over TDEE" : "Under TDEE"}</span>
+      <strong>{logged ? whole(Math.abs(difference)) : "—"}</strong></div>
+    <small>
+      {logged ? "Calories eaten minus TDEE. " : "Nothing logged yet. "}
+      {day.pounds !== null && <>Based on {amount(day.pounds)} lb{day.weighedOn && day.weighedOn !== date ? ` from ${shortDate(day.weighedOn)}` : ""}.</>}
+    </small>
+  </section>;
 }
 
 /**
